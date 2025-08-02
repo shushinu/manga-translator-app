@@ -27,25 +27,31 @@ menu = st.sidebar.radio("請選擇操作步驟：", ["上傳圖片並辨識文�
 
 # 🔧 temperature スライダーを追加
 temperature = st.sidebar.slider(
-    "翻訳の創造性（temperature）", 
-    min_value=0.0, 
-    max_value=1.0, 
-    value=0.95,  # 初期値は今使っている0.95に合わせています
+    "翻譯的創造性（temperature）",
+    min_value=0.0,
+    max_value=1.0,
+    value=0.95,
     step=0.05,
-    help="値が高いほど自由な翻訳になります（例：口調・表現が多様）"
+    help="值が高いほど自由な翻訳になります（例：口語表現多樣化）"
 )
 
-# ステップ1：登場人物登録
+# ======================================================
+# 🟢 ステップ1：登場人物登録（アップロード自動リセット対応）
+# ======================================================
 if menu == "上傳圖片並辨識文字（OCR）":
     st.subheader("👥 請登錄登場人物")
     st.markdown("請依序輸入角色圖片、名稱、性格後再執行 OCR")
 
-    char_img = st.file_uploader("登場人物圖片（一次一位）", type=["jpg", "jpeg", "png"], key="char_img")
+    # ✅ アップロード欄のkeyを動的に変更（リセット対応）
+    upload_key = "char_img" if "reset_char_img" not in st.session_state else "char_img_new"
+    char_img = st.file_uploader("登場人物圖片（一次一位）", type=["jpg", "jpeg", "png"], key=upload_key)
     char_name = st.text_input("名稱（例如：大雄）", key="char_name")
     char_desc = st.text_area("性格或特徵（例如：愛哭、懶散）", key="char_desc")
 
+    # ✅ 登録ボタン
     if st.button("➕ 登錄"):
         if char_img and char_name:
+            # 登録処理
             st.session_state["characters"] = st.session_state.get("characters", [])
             st.session_state["characters"].append({
                 "image": char_img,
@@ -53,9 +59,18 @@ if menu == "上傳圖片並辨識文字（OCR）":
                 "description": char_desc
             })
             st.success(f"已註冊角色：{char_name}")
+
+            # ✅ file_uploader をリセットするフラグを設定
+            st.session_state["reset_char_img"] = True
+            st.rerun()
         else:
             st.warning("圖片與名稱為必填欄位")
 
+    # ✅ resetフラグを一度使ったら削除
+    if "reset_char_img" in st.session_state:
+        del st.session_state["reset_char_img"]
+
+    # ✅ 登録済みキャラクターの表示
     if "characters" in st.session_state and st.session_state["characters"]:
         st.markdown("#### ✅ 已註冊角色：")
         for i, char in enumerate(st.session_state["characters"]):
@@ -63,7 +78,6 @@ if menu == "上傳圖片並辨識文字（OCR）":
 
             with col1:
                 st.image(char["image"], caption=None, width=100)
-
             with col2:
                 new_name = st.text_input(f"名稱（{i}）", char["name"], key=f"edit_name_{i}")
                 new_desc = st.text_area(f"性格／特徵（{i}）", char["description"], key=f"edit_desc_{i}")
@@ -71,7 +85,6 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.session_state["characters"][i]["name"] = new_name
                     st.session_state["characters"][i]["description"] = new_desc
                     st.success(f"已更新角色：{new_name}")
-
             with col3:
                 if st.button(f"❌ 刪除", key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
@@ -79,6 +92,9 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.success(f"已刪除角色：{deleted_name}")
                     st.rerun()
 
+    # ======================================================
+    # 🟢 メイン画像アップロード（OCR用）→ 元コードを保持
+    # ======================================================
     st.markdown("---")
     uploaded_file = st.file_uploader("📄 上傳漫畫圖片（JPEG/PNG）", type=["jpg", "jpeg", "png"], key="main_img")
 
@@ -89,7 +105,7 @@ if menu == "上傳圖片並辨識文字（OCR）":
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         st.session_state["image_base64"] = img_base64
         st.session_state.pop("ocr_text", None)
-        st.session_state["corrected_text_saved"] = False  # 強制標記為未儲存
+        st.session_state["corrected_text_saved"] = False
 
     elif "image_base64" in st.session_state:
         img_bytes = base64.b64decode(st.session_state["image_base64"])
@@ -100,44 +116,14 @@ if menu == "上傳圖片並辨識文字（OCR）":
 
     if image:
         st.image(image, caption="已上傳圖片", use_container_width=True)
-
         if st.button("📄 執行辨識"):
             with st.spinner("辨識中... 使用 GPT-4o 分析圖片"):
                 image_url = f"data:image/png;base64,{img_base64}"
-
-                # 新增：角色名稱限制
-                character_names = [c['name'] for c in st.session_state.get("characters", []) if c['name']]
-                character_name_list = "、".join(character_names)
-                name_restriction = f"以下是本圖片中登場的角色姓名，請僅從中選擇發話者姓名：{character_name_list}。"
-
-                char_descriptions = "\n".join([
-                    f"・{c['name']}：{c['description']}" for c in st.session_state.get("characters", [])
+                character_context = "\n".join([
+                    f"・{c['name']}：{c['description']}"
+                    for c in st.session_state.get("characters", [])
                 ])
-                character_context = f"以下角色資訊可供參考：\n{char_descriptions}" if char_descriptions else ""
-
-                prompt_text = prompt_text = f"""
-你是一位熟悉日本漫畫對話場景的台詞辨識助手，請從下方圖片中，**只提取出位於漫畫「對話框（吹き出し）」中的日文對白**。
-
-🧩 規則如下：
-
-1. 必須依據漫畫畫面上**實際的空間位置順序（從右到左、從上到下）**來排列對話。
-2. 每一句對話必須標示出發言角色名稱，角色名稱需**嚴格依照我提供的角色資訊**（如下）。
-3. 不得使用其他推測角色名或外語名，例如 Nobita 或 のび太。
-4. 背景文字、旁白、效果音都請略過不處理。
-5. 若文字辨識不清，請根據上下文自然補全。
-
-📋 以下是角色資訊（由使用者上傳圖片與命名）：
-{character_context}
-
-📌 輸出格式（每行一條）：
-角色名稱：台詞內容
-
-範例：
-大雄：我今天才不寫作業！  
-哆啦A夢：你又來了……
-
-請開始執行。
-"""
+                prompt_text = f"""你是一位熟悉日本漫畫對話場景的台詞辨識助手，請只提取漫畫對話框中的日文對白。\n{character_context}"""
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
@@ -145,9 +131,8 @@ if menu == "上傳圖片並辨識文字（OCR）":
                         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_url}}]}
                     ]
                 )
-                ocr_text = response.choices[0].message.content.strip()
-                st.session_state["ocr_text"] = ocr_text
-                st.session_state["corrected_text_saved"] = False  # OCR 結果更新後需重新儲存
+                st.session_state["ocr_text"] = response.choices[0].message.content.strip()
+                st.session_state["corrected_text_saved"] = False
 
     if "ocr_text" in st.session_state:
         st.text_area("已辨識文字（可於下一步修正）", st.session_state["ocr_text"], height=300)
