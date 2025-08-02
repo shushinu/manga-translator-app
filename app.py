@@ -1,11 +1,11 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 from PIL import Image
 import io
 import base64
 
 # ✅ OpenAI APIキーを .streamlit/secrets.toml から取得
-openai.api_key = st.secrets["openai"]["api_key"]
+client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 st.set_page_config(page_title="翻譯支援測試app", layout="wide")
 
@@ -138,7 +138,7 @@ if menu == "上傳圖片並辨識文字（OCR）":
 
 請開始執行。
 """
-                response = openai.ChatCompletion.create(
+                response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {"role": "system", "content": prompt_text},
@@ -241,7 +241,7 @@ elif menu == "輸入提示並翻譯":
 
         if st.button("執行翻譯"):
             with st.spinner("翻譯中... 使用 GPT-4o"):
-                response = openai.ChatCompletion.create(
+                response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
                         {"role": "system", "content": "你是一位優秀的日文漫畫翻譯專家，翻譯成自然且富含角色語氣的台灣繁體中文。"},
