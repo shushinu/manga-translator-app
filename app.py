@@ -39,19 +39,28 @@ except Exception as e:
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # ===========================================
-# 🔐 混合登入（Authorization Code + PKCE；同分頁導轉；同時保留 pv 備援）
+# 🔐 混合登入（Authorization Code + PKCE，verifier 放在 redirect_to 的 query）
 # ===========================================
 def _set_sb_auth_with_token(token: str):
-    """讓後續對資料表的操作帶有「登入者身分」（RLS 才會生效）"""
     try:
         sb.postgrest.auth(token)
     except Exception:
         pass
 
+def _fetch_supabase_user(access_token: str) -> dict:
+    resp = requests.get(
+        f"{st.secrets['supabase']['url']}/auth/v1/user",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "apikey": st.secrets["supabase"]["anon_key"],
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
 def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
-    # auth_user 可能是 Supabase 回傳的 user JSON 或 model_dump() 結果
-    user_meta = auth_user.get("user_metadata") or auth_user.get("raw_user_meta_data") or {}
-    full_name = user_meta.get("full_name") or auth_user.get("email") or "Guest"
+    full_name = (auth_user.get("user_metadata") or {}).get("full_name") or auth_user.get("email", "Guest")
     return {
         "id": auth_user.get("id"),
         "email": auth_user.get("email"),
@@ -74,54 +83,50 @@ def _make_pkce_pair():
     challenge = _sha256_b64url(verifier)
     return verifier, challenge
 
-def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
+def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri: str | None = None) -> dict:
     """
     用 authorization code + code_verifier 向 Supabase 換 access_token。
-    正確的 payload key 必須是 "code" 與 "code_verifier"。
+    必須用 x-www-form-urlencoded 並把 grant_type 放在 body。
     """
-    url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=authorization_code"
+    url = f"{st.secrets['supabase']['url']}/auth/v1/token"
     headers = {
         "apikey": st.secrets["supabase"]["anon_key"],
-        # Authorization header 可加可不加，但加上更保險
         "Authorization": f"Bearer {st.secrets['supabase']['anon_key']}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
     }
-    payload = {
-        "code": auth_code,               # ← 關鍵：不是 auth_code，而是 code
-        "code_verifier": code_verifier,  # ← 關鍵：必須是 code_verifier
+    form = {
+        "grant_type": "authorization_code",
+        "code": auth_code,
+        "code_verifier": code_verifier,
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=15)
+    if redirect_uri:
+        form["redirect_uri"] = redirect_uri
+
+    r = requests.post(url, headers=headers, data=form, timeout=15)
     if r.status_code != 200:
-        # 把後端回覆一起拋出，之後好除錯
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
 
-
 def auth_gate(require_login: bool = True):
-    """
-    門神（必須放在任何 UI 之前）：
-      - Google 登入（Authorization Code + PKCE；同分頁；不自帶 state）
-      - Email/密碼 註冊＋登入
-      - （可選）一鍵登入 Magic Link：如需可再開
-    """
+    """門神：Google（Code+PKCE，verifier 夾在 redirect_to）＋ Email/密碼。"""
     qp = st.query_params
 
-    # A) OAuth 回呼：?code=...（Supabase 成功回來）；同時也可能帶著我們在 redirect_to 附加的 ?pv=...
+    # A) OAuth 回來：?code=...，同時我們期待有 ?pv=...（verifier）
     if "code" in qp:
         code = qp.get("code")
-        # 先取 session_state 的 verifier；若瀏覽器導轉導致 session 遺失，退而求其次用 pv 備援
-        verifier = st.session_state.get("pkce_verifier") or qp.get("pv", "")
-        if SHOW_DEBUG:
-            with st.expander("DEBUG", expanded=True):
-                st.write("query_params:", dict(qp))
-                st.write("session has pkce_verifier:", "pkce_verifier" in st.session_state)
-                st.write("using verifier length:", len(verifier or ""))
+        verifier = qp.get("pv", "")  # 我們自己放在 redirect_to 的參數
+        # 重新組出當時 authorize 使用的 redirect_uri（要一模一樣）
+        redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
+        if not redirect_url.endswith("/"):
+            redirect_url += "/"
+        sep = "&" if ("?" in redirect_url) else "?"
+        redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}"
 
         if not verifier:
-            st.error("OAuth 回來缺少 PKCE verifier（pv），請重試（建議使用無痕視窗並允許第三方 Cookie）。")
+            st.error("OAuth 回來缺少 verifier（pv），請重試。")
         else:
             try:
-                data = _exchange_code_for_session(code, verifier)
+                data = _exchange_code_for_session(code, verifier, redirect_with_pv)
                 access_token = data.get("access_token")
                 user_json = data.get("user") or {}
                 if not access_token:
@@ -129,51 +134,53 @@ def auth_gate(require_login: bool = True):
                 else:
                     st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
                     _set_sb_auth_with_token(access_token)
-                    # 清掉 query（避免外洩）
                     st.query_params.clear()
                     st.rerun()
             except Exception as e:
                 st.error(f"交換 access_token 發生錯誤：{e}")
 
-    # B) OAuth 被 Supabase 擋掉（例如 invalid state）
     elif "error" in qp:
+        # 這是 Supabase 先擋掉（例如 invalid state），直接顯示並清除
         st.warning(f"OAuth 回應：{qp.get('error_description', qp.get('error'))}")
-        if SHOW_DEBUG:
-            with st.expander("DEBUG", expanded=True):
-                st.write("query_params:", dict(qp))
         st.query_params.clear()
 
-    # C) 尚未登入 → 顯示登入 UI
+    # B) 未登入 → 顯示登入 UI
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # 產生 PKCE
+        # 產生 PKCE（每次顯示登入頁都重生一組）
         verifier, challenge = _make_pkce_pair()
-        # 放到 session_state（首選）
-        st.session_state["pkce_verifier"] = verifier
 
-        # 你的公開網址（與 Supabase Site URL / Redirect URLs 完全一致，包含最後的 /）
+        # 你的公開網址（與 Supabase Site URL / Redirect URLs 完全一致，**包含最後的 /**）
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
 
-        # 再把 verifier 夾在 redirect_to 的 query（備援）
+        # 把 verifier 放在 redirect_to 的 query：?pv=...
         sep = "&" if ("?" in redirect_url) else "?"
         redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}"
 
-        # 明確指定 PKCE 流程；不自帶 state（讓 Supabase 自己管）
+        # 不帶 state，讓 Supabase 自己處理；我們只帶 PKCE challenge
         login_url = (
             f"{st.secrets['supabase']['url']}/auth/v1/authorize"
             f"?provider=google"
-            f"&flow_type=pkce"
             f"&response_type=code"
             f"&code_challenge={urllib.parse.quote(challenge)}"
             f"&code_challenge_method=S256"
             f"&redirect_to={urllib.parse.quote(redirect_with_pv)}"
         )
 
-        # ✅ 用同一分頁導轉（避免新分頁導致 cookie/state 丟失）
-        st.link_button("使用 Google 登入", login_url)
+        # 同分頁導轉（避免被瀏覽器擋彈窗）
+        st.markdown(
+            f'''
+            <a href="{login_url}"
+               style="display:inline-block;padding:10px 14px;border-radius:8px;
+                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
+               使用 Google 登入
+            </a>
+            ''',
+            unsafe_allow_html=True
+        )
 
         with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
             st.caption("第一次使用可直接註冊；成功後自動登入。")
@@ -186,7 +193,8 @@ def auth_gate(require_login: bool = True):
                 reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="reg_pw")
                 reg_pw2 = st.text_input("再次輸入密碼", type="password", key="reg_pw2")
                 if st.button("註冊並登入", key="btn_register"):
-                    if not re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
+                    import re as _re
+                    if not _re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
                         st.warning("Email 格式不正確。")
                     elif not reg_pw or len(reg_pw) < 6:
                         st.warning("密碼至少 6 個字元。")
@@ -234,7 +242,7 @@ def auth_gate(require_login: bool = True):
         else:
             return None
 
-    # D) 已登入 → 顯示狀態 + 登出
+    # C) 已登入 → 顯示狀態 + 登出
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
     if st.button("🔓 登出"):
         try:
@@ -244,8 +252,6 @@ def auth_gate(require_login: bool = True):
             pass
         st.session_state.pop("user", None)
         st.rerun()
-
-    return st.session_state["user"]
 
 # ✅ 啟用門神（未登入就無法操作）
 user = auth_gate(require_login=True)
