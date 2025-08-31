@@ -9,8 +9,10 @@ import base64
 import re
 import requests
 import urllib.parse
-import streamlit.components.v1 as components
 from supabase import create_client
+
+# （可選）開啟除錯資訊
+SHOW_DEBUG = False
 
 # ===========================================
 # 初始化 Supabase（使用 cache_resource，避免重複連線）
@@ -37,28 +39,19 @@ except Exception as e:
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # ===========================================
-# 🔐 混合登入（Authorization Code + PKCE，verifier 放在 redirect_to 的 query）
+# 🔐 混合登入（Authorization Code + PKCE；同分頁導轉；同時保留 pv 備援）
 # ===========================================
 def _set_sb_auth_with_token(token: str):
+    """讓後續對資料表的操作帶有「登入者身分」（RLS 才會生效）"""
     try:
         sb.postgrest.auth(token)
     except Exception:
         pass
 
-def _fetch_supabase_user(access_token: str) -> dict:
-    resp = requests.get(
-        f"{st.secrets['supabase']['url']}/auth/v1/user",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "apikey": st.secrets["supabase"]["anon_key"],
-        },
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
 def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
-    full_name = (auth_user.get("user_metadata") or {}).get("full_name") or auth_user.get("email", "Guest")
+    # auth_user 可能是 Supabase 回傳的 user JSON 或 model_dump() 結果
+    user_meta = auth_user.get("user_metadata") or auth_user.get("raw_user_meta_data") or {}
+    full_name = user_meta.get("full_name") or auth_user.get("email") or "Guest"
     return {
         "id": auth_user.get("id"),
         "email": auth_user.get("email"),
@@ -82,6 +75,9 @@ def _make_pkce_pair():
     return verifier, challenge
 
 def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
+    """
+    用 authorization code + code_verifier 換 access_token
+    """
     url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=authorization_code"
     headers = {
         "apikey": st.secrets["supabase"]["anon_key"],
@@ -93,15 +89,27 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
     return r.json()
 
 def auth_gate(require_login: bool = True):
-    """門神：Google（Code+PKCE，verifier 夾在 redirect_to）＋ Email/密碼。"""
+    """
+    門神（必須放在任何 UI 之前）：
+      - Google 登入（Authorization Code + PKCE；同分頁；不自帶 state）
+      - Email/密碼 註冊＋登入
+      - （可選）一鍵登入 Magic Link：如需可再開
+    """
     qp = st.query_params
 
-    # A) OAuth 回來：?code=...，同時我們期待有 ?pv=...（verifier）
+    # A) OAuth 回呼：?code=...（Supabase 成功回來）；同時也可能帶著我們在 redirect_to 附加的 ?pv=...
     if "code" in qp:
         code = qp.get("code")
-        verifier = qp.get("pv", "")  # 我們自己放在 redirect_to 的參數
+        # 先取 session_state 的 verifier；若瀏覽器導轉導致 session 遺失，退而求其次用 pv 備援
+        verifier = st.session_state.get("pkce_verifier") or qp.get("pv", "")
+        if SHOW_DEBUG:
+            with st.expander("DEBUG", expanded=True):
+                st.write("query_params:", dict(qp))
+                st.write("session has pkce_verifier:", "pkce_verifier" in st.session_state)
+                st.write("using verifier length:", len(verifier or ""))
+
         if not verifier:
-            st.error("OAuth 回來缺少 verifier（pv），請重試。")
+            st.error("OAuth 回來缺少 PKCE verifier（pv），請重試（建議使用無痕視窗並允許第三方 Cookie）。")
         else:
             try:
                 data = _exchange_code_for_session(code, verifier)
@@ -112,56 +120,51 @@ def auth_gate(require_login: bool = True):
                 else:
                     st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
                     _set_sb_auth_with_token(access_token)
+                    # 清掉 query（避免外洩）
                     st.query_params.clear()
                     st.rerun()
             except Exception as e:
                 st.error(f"交換 access_token 發生錯誤：{e}")
 
+    # B) OAuth 被 Supabase 擋掉（例如 invalid state）
     elif "error" in qp:
-        # 這是 Supabase 先擋掉（例如 invalid state），直接顯示並清除
         st.warning(f"OAuth 回應：{qp.get('error_description', qp.get('error'))}")
+        if SHOW_DEBUG:
+            with st.expander("DEBUG", expanded=True):
+                st.write("query_params:", dict(qp))
         st.query_params.clear()
 
-    # B) 未登入 → 顯示登入 UI
+    # C) 尚未登入 → 顯示登入 UI
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
         # 產生 PKCE
         verifier, challenge = _make_pkce_pair()
+        # 放到 session_state（首選）
+        st.session_state["pkce_verifier"] = verifier
 
         # 你的公開網址（與 Supabase Site URL / Redirect URLs 完全一致，包含最後的 /）
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
 
-        # 把 verifier 放在 redirect_to 的 query：?pv=...
-        # 要考慮已有 query 的情況
+        # 再把 verifier 夾在 redirect_to 的 query（備援）
         sep = "&" if ("?" in redirect_url) else "?"
         redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}"
 
-        # 不帶 state，讓 Supabase 自己處理；我們只帶 PKCE challenge
+        # 明確指定 PKCE 流程；不自帶 state（讓 Supabase 自己管）
         login_url = (
             f"{st.secrets['supabase']['url']}/auth/v1/authorize"
             f"?provider=google"
+            f"&flow_type=pkce"
             f"&response_type=code"
             f"&code_challenge={urllib.parse.quote(challenge)}"
             f"&code_challenge_method=S256"
             f"&redirect_to={urllib.parse.quote(redirect_with_pv)}"
         )
 
-        # 在「新分頁」開啟最穩（避免 iframe sandbox）
-        st.markdown(
-            f'''
-            <a href="{login_url}"
-               target="_blank" rel="noopener noreferrer"
-               onclick="window.open('{login_url}', '_blank', 'noopener,noreferrer'); return false;"
-               style="display:inline-block;padding:10px 14px;border-radius:8px;
-                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
-               使用 Google 登入
-            </a>
-            ''',
-            unsafe_allow_html=True
-        )
+        # ✅ 用同一分頁導轉（避免新分頁導致 cookie/state 丟失）
+        st.link_button("使用 Google 登入", login_url)
 
         with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
             st.caption("第一次使用可直接註冊；成功後自動登入。")
@@ -174,8 +177,7 @@ def auth_gate(require_login: bool = True):
                 reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="reg_pw")
                 reg_pw2 = st.text_input("再次輸入密碼", type="password", key="reg_pw2")
                 if st.button("註冊並登入", key="btn_register"):
-                    import re as _re
-                    if not _re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
+                    if not re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
                         st.warning("Email 格式不正確。")
                     elif not reg_pw or len(reg_pw) < 6:
                         st.warning("密碼至少 6 個字元。")
@@ -223,7 +225,7 @@ def auth_gate(require_login: bool = True):
         else:
             return None
 
-    # C) 已登入 → 顯示狀態 + 登出
+    # D) 已登入 → 顯示狀態 + 登出
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
     if st.button("🔓 登出"):
         try:
@@ -235,7 +237,6 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
-
 
 # ✅ 啟用門神（未登入就無法操作）
 user = auth_gate(require_login=True)
@@ -278,20 +279,22 @@ def get_user_id():
 
 def get_user_email():
     u = st.session_state.get("user") or {}
-    return u.get("email")
+    return u.get("email") or ""
 
 # ======================================================
-# 🟢 Step1：上傳圖片 & OCR（含角色註冊）
+# 🟢 ステップ1：登場人物登録（穩定版：用版本號重置 key）
 # ======================================================
 if menu == "上傳圖片並辨識文字（OCR）":
     st.subheader("👥 請登錄登場人物")
     st.markdown("請依序輸入角色圖片、名稱、性格後再執行 OCR")
 
+    # ---- 初始化版本號（避免用旗標來回切換）----
     if "char_uploader_ver" not in st.session_state:
         st.session_state["char_uploader_ver"] = 0
     if "char_fields_ver" not in st.session_state:
         st.session_state["char_fields_ver"] = 0
 
+    # 依版本號產生**穩定且唯一**的 widget key
     upload_key = f"char_img_{st.session_state['char_uploader_ver']}"
     name_key   = f"char_name_{st.session_state['char_fields_ver']}"
     desc_key   = f"char_desc_{st.session_state['char_fields_ver']}"
@@ -300,6 +303,7 @@ if menu == "上傳圖片並辨識文字（OCR）":
     char_name = st.text_input("名稱（例如：大雄）", key=name_key)
     char_desc = st.text_area("性格或特徵（例如：愛哭、懶散）", key=desc_key)
 
+    # ✅ 登錄按鈕
     if st.button("➕ 登錄"):
         if char_img and char_name:
             img_bytes = char_img.read()
@@ -316,15 +320,18 @@ if menu == "上傳圖片並辨識文字（OCR）":
         else:
             st.warning("圖片與名稱為必填欄位")
 
+    # ✅ 已註冊角色清單
     if "characters" in st.session_state and st.session_state["characters"]:
         st.markdown("#### ✅ 已註冊角色：")
         for i, char in enumerate(st.session_state["characters"]):
             col1, col2, col3 = st.columns([0.3, 0.5, 0.2])
+
             with col1:
                 try:
                     st.image(Image.open(io.BytesIO(char["image_bytes"])), caption=None, width=100)
                 except Exception:
                     st.image(char.get("image_bytes", None), caption=None, width=100)
+
             with col2:
                 new_name = st.text_input(f"名稱（{i}）", char["name"], key=f"edit_name_{i}")
                 new_desc = st.text_area(f"性格／特徵（{i}）", char["description"], key=f"edit_desc_{i}")
@@ -332,6 +339,7 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.session_state["characters"][i]["name"] = new_name
                     st.session_state["characters"][i]["description"] = new_desc
                     st.success(f"已更新角色：{new_name}")
+
             with col3:
                 if st.button(f"❌ 刪除", key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
@@ -339,6 +347,9 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.success(f"已刪除角色：{deleted_name}")
                     st.rerun()
 
+    # ======================================================
+    # 🟢 主圖上傳（OCR 用）
+    # ======================================================
     st.markdown("---")
     uploaded_file = st.file_uploader("📄 上傳漫畫圖片（JPEG/PNG）", type=["jpg", "jpeg", "png"], key="main_img")
 
@@ -349,9 +360,13 @@ if menu == "上傳圖片並辨識文字（OCR）":
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         st.session_state["image_base64"] = img_base64
 
-        # 清掉上一輪狀態
-        for k in ["log_id", "combined_prompt", "prompt_template", "prompt_input", "translation", "ocr_text"]:
-            st.session_state.pop(k, None)
+        # 清掉上一輪的狀態
+        st.session_state.pop("log_id", None)
+        st.session_state.pop("combined_prompt", None)
+        st.session_state.pop("prompt_template", None)
+        st.session_state.pop("prompt_input", None)
+        st.session_state.pop("translation", None)
+        st.session_state.pop("ocr_text", None)
         st.session_state["corrected_text_saved"] = False
     elif "image_base64" in st.session_state:
         img_bytes = base64.b64decode(st.session_state["image_base64"])
@@ -373,13 +388,14 @@ if menu == "上傳圖片並辨識文字（OCR）":
 你是一位熟悉日本漫畫對話場景的台詞辨識助手，請從下方圖片中，**只提取漫畫「對話框（吹き出し）」中的日文台詞**。
 
 🧩 規則：
-1. 依漫畫閱讀順序：整頁 **從右到左，由上到下** 排序。
-2. 每句台詞標註角色，角色必須從名單選擇：
+1. 依漫畫閱讀順序：整頁 **從右到左，由上到下** 排序，對話框也照此順序。
+2. 每句台詞前標示發言角色，角色名稱必須從下方列表中選擇：
    {character_context if character_context else "（沒有角色名單，若無法判斷就寫『不明』）"}
-3. 忽略旁白、效果音、註解等。
-4. 無法辨識的文字用「□」標示。
+3. 不得使用未提供的名字或外語名（如 Nobita、のび太）。
+4. 忽略旁白、效果音、標題、註解或任何非對話框文字。
+5. 無法辨識的文字請保留空格或用「□」標示，不要自行補完。
 
-📌 格式：
+📌 輸出格式（每行一筆）：
 角色名稱：台詞
 """
                 try:
@@ -400,7 +416,7 @@ if menu == "上傳圖片並辨識文字（OCR）":
         st.text_area("已辨識文字（可於下一步修正）", st.session_state["ocr_text"], height=300)
 
 # ======================================================
-# 🟡 Step2：修正辨識文字
+# 🟡 ステップ2：テキスト修正
 # ======================================================
 elif menu == "修正辨識文字":
     if "ocr_text" not in st.session_state:
@@ -420,6 +436,8 @@ elif menu == "修正辨識文字":
 
         with col2:
             st.markdown("#### ✏️ 修正區域")
+
+            # 僅在 OCR「剛更新」時初始化一次，不覆寫使用者的修正
             current_version = st.session_state.get("ocr_version", 0)
             if st.session_state.get("corrected_text_version") != current_version:
                 st.session_state["corrected_text"] = st.session_state["ocr_text"]
@@ -436,7 +454,7 @@ elif menu == "修正辨識文字":
                 st.success("內容已儲存，可進一步進行翻譯。")
 
 # ======================================================
-# 🟣 Step3：輸入提示並翻譯
+# 🟣 ステップ3：輸入提示並翻譯
 # ======================================================
 elif menu == "輸入提示並翻譯":
     if "corrected_text" not in st.session_state:
@@ -444,7 +462,7 @@ elif menu == "輸入提示並翻譯":
     else:
         st.subheader("🧩 漫畫翻譯參考資料輸入欄")
 
-        # ---------- DB 寫入工具 ----------
+        # ---------- 工具函式（只定義，不會自動寫庫） ----------
         def _get_combined() -> str:
             return (
                 st.session_state.get("combined_prompt")
@@ -454,14 +472,15 @@ elif menu == "輸入提示並翻譯":
             ).strip()
 
         def _create_log_only_here(sb_client, combined_text: str):
-            """沒有 log_id 才建新列；綁定登入者 user_id / user_email"""
+            """
+            僅在沒有 log_id 且 combined_text 有內容時，insert 新列
+            """
             if st.session_state.get("log_id") or not combined_text:
                 return st.session_state.get("log_id")
             res = (
                 sb_client.table("translation_logs")
                 .insert({
-                    "user_id": get_user_id(),                 # ✅ 綁定真正使用者
-                    "user_email": get_user_email(),           # （可選）方便查詢
+                    "user_id": get_user_id(),           # 寫入真正的 auth.users.id
                     "combined_prompt": combined_text,
                     "output_text": None,
                 })
@@ -493,10 +512,7 @@ elif menu == "輸入提示並翻譯":
             return True
         # ---------- 工具函式結束 ----------
 
-        # 三大欄位：背景、術語、方針（角色別欄位在背景下）
-        input_keys = ["background_style", "terminology", "translation_policy"]
-
-        # —— 模板們 ——
+        # 三大欄位：背景、術語、方針
         background_template = """1. 故事發生在哪個年代？（例如：昭和50年代、1970年代、未來世界）
 答：
 
@@ -555,17 +571,15 @@ elif menu == "輸入提示並翻譯":
             "translation_policy": "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
         }
 
-        # ===== ① 作品背景與風格 =====
         st.markdown("### 作品背景與風格")
         st.caption("請描述故事的時代・舞台、文化風格與敘事特色。")
         with st.expander("📌 參考範例（點擊展開）"):
             st.code(examples["background_style"], language="markdown")
         st.text_area("輸入內容：", key="background_style", height=200, value=background_template)
 
-        # ===== ② 角色別參考輸入 =====
         if "characters" in st.session_state and st.session_state["characters"]:
             st.markdown("### 角色個性・劇中經歷")
-            st.caption("以下欄位會依你註冊的角色自動生成；顯示順序＝註冊順序。")
+            st.caption("以下欄位會根據一開始註冊的角色自動生成；顯示順序＝註冊順序。")
             for idx, c in enumerate(st.session_state["characters"]):
                 char_key = f"character_traits_{idx}"
                 if char_key not in st.session_state:
@@ -573,14 +587,12 @@ elif menu == "輸入提示並翻譯":
                 with st.expander(f"🧑‍🎨 {c.get('name','角色')} 的角色補充（點此展開）", expanded=False):
                     st.text_area("輸入內容：", key=char_key, height=200)
 
-        # ===== ③ 專業術語／用語習慣 =====
         st.markdown("### 該作品的特殊用語／道具")
         st.caption("請列出劇中出現的特殊道具或用語，以及翻譯建議。")
         with st.expander("📌 參考範例（點擊展開）"):
             st.code(examples["terminology"], language="markdown")
         st.text_area("輸入內容：", key="terminology", height=200, value=terminology_template)
 
-        # ===== ④ 翻譯方針 =====
         st.markdown("### 翻譯方針")
         st.caption("請說明翻譯時應注意的語氣、對象、整體風格等原則。")
         with st.expander("📌 參考範例（點擊展開）"):
@@ -671,10 +683,7 @@ elif menu == "輸入提示並翻譯":
                                         "【輸出格式要求】純文字、只有譯文本身；若輸入是多行，就輸出等量多行；不要出現任何多餘符號或區段標題。"
                                     ),
                                 },
-                                {
-                                    "role": "user",
-                                    "content": prompt_for_translation
-                                }
+                                {"role": "user", "content": prompt_for_translation}
                             ],
                             temperature=temperature,
                             top_p=0.95,
