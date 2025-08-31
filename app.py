@@ -72,28 +72,29 @@ def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
 
 def auth_gate(require_login: bool = True):
     """門神：處理 OAuth fragment、Google 連結、Email 註冊/登入、登出等。"""
-    # 1) 先把 #fragment 搬到 ?query（Python 才讀得到）→ 強制 reload 版本
+
+    # A) 把 #fragment 搬到 ?query（只讀 window，本頁即可；並強制 reload）
     components.html("""
     <script>
     (function () {
       try {
-        const topWin = window.top || window;
-        const hash = topWin.location.hash ? topWin.location.hash.substring(1) : "";
+        const loc = window.location;               // ✅ 不讀 window.top，避免跨網域權限被擋
+        const hash = loc.hash ? loc.hash.substring(1) : "";
         if (!hash) return;
         const hp = new URLSearchParams(hash);
-        const qp = new URLSearchParams(topWin.location.search);
+        const qp = new URLSearchParams(loc.search);
         let changed = false;
         for (const [k, v] of hp.entries()) { qp.set(k, v); changed = true; }
         if (!changed) return;
-        const newUrl = topWin.location.origin + topWin.location.pathname + "?" + qp.toString();
-        topWin.history.replaceState({}, "", newUrl);
-        topWin.location.href = newUrl; // 立即刷新：讓 Python 看到 ?access_token
-      } catch (e) { /* ignore */ }
+        const newUrl = loc.origin + loc.pathname + "?" + qp.toString();
+        window.history.replaceState({}, "", newUrl);
+        loc.href = newUrl;                          // 立即刷新：讓 Python 看到 ?access_token
+      } catch (e) {}
     })();
     </script>
     """, height=0)
 
-    # 2) Google 登入連結（加 response_type=token，並確保結尾 /）
+    # B) Google 登入連結（加 response_type=token，並確保 redirect_url 以 / 結尾）
     redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
     if not redirect_url.endswith("/"):
         redirect_url += "/"
@@ -102,7 +103,7 @@ def auth_gate(require_login: bool = True):
         f"?provider=google&response_type=token&redirect_to={urllib.parse.quote(redirect_url)}"
     )
 
-    # 3) 若 URL query 有 access_token（多半來自 Google OAuth）
+    # 讀取 query：拿到 access_token 就登入
     query_params = st.query_params
     if "access_token" in query_params:
         access_token = query_params.get("access_token")
@@ -114,24 +115,27 @@ def auth_gate(require_login: bool = True):
         except Exception as e:
             st.warning(f"登入驗證失敗：{e}")
         finally:
-            # ✅ 清掉網址上的 query（含 token），避免外洩
-            st.query_params.clear()
+            st.query_params.clear()  # 清掉網址上的 token
 
-    # 4) 未登入 → 顯示登入 UI（Google + Email/密碼）
+    elif "code" in query_params:
+        # 若誤用到 code flow，這裡會提示（理論上現在不會看到）
+        st.error("Google 回傳的是 `code`，不是 `access_token`。請確認連結包含 `response_type=token`，"
+                 "且 Supabase 的 Site URL / Redirect URLs 與 [app].redirect_url 完全一致（含結尾 `/`）。")
+
+    # 未登入 → 顯示登入 UI（Google + Email/密碼）
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # 👉 用 target="_top" 在「整個分頁」導向 Google（避免在 iframe 內被擋）
-        st.markdown(
-            f'''
-            <a href="{login_url}" target="_top" style="
-               display:inline-block;padding:10px 14px;border-radius:8px;
-               border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
-               使用 Google 登入
-            </a>
-            ''',
-            unsafe_allow_html=True
-        )
+        # C) 用 components.html 按鈕，點擊時在『整個分頁』導向 Google
+        components.html(f"""
+        <div>
+          <button onclick="window.top.location.href='{login_url}'"
+                  style="padding:10px 14px;border-radius:8px;border:1px solid #444;
+                         background:#1f6feb;color:#fff;cursor:pointer;">
+            使用 Google 登入
+          </button>
+        </div>
+        """, height=60)
 
         with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
             st.caption("第一次使用可直接註冊；成功後自動登入。")
@@ -187,13 +191,12 @@ def auth_gate(require_login: bool = True):
                     except Exception as e:
                         st.error(f"登入失敗：{e}")
 
-        # 強制登入才能用
         if require_login:
             st.stop()
         else:
             return None
 
-    # 5) 已登入 UI（顯示資訊 + 登出）
+    # 已登入 UI（顯示資訊 + 登出）
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
     if st.button("🔓 登出"):
         try:
@@ -205,6 +208,7 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
+
 
 # ✅ 啟用門神（未登入就無法操作）
 user = auth_gate(require_login=True)
