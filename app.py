@@ -86,26 +86,29 @@ def _make_pkce_pair():
 def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri: str | None = None) -> dict:
     """
     用 authorization code + code_verifier 向 Supabase 換 access_token。
-    必須用 x-www-form-urlencoded 並把 grant_type 放在 body。
+    重點：
+      1) URL 要帶 ?grant_type=pkce
+      2) Body 用 JSON，欄位是 auth_code / code_verifier（必要），可選 redirect_uri
     """
-    url = f"{st.secrets['supabase']['url']}/auth/v1/token"
+    url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=pkce"
     headers = {
         "apikey": st.secrets["supabase"]["anon_key"],
         "Authorization": f"Bearer {st.secrets['supabase']['anon_key']}",
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
     }
-    form = {
-        "grant_type": "authorization_code",
-        "code": auth_code,
-        "code_verifier": code_verifier,
+    payload = {
+        "auth_code": auth_code,          # ← Supabase 這裡要用 auth_code
+        "code_verifier": code_verifier,  # ← PKCE verifier（要與之前的 challenge 對得上）
     }
     if redirect_uri:
-        form["redirect_uri"] = redirect_uri
+        payload["redirect_uri"] = redirect_uri
 
-    r = requests.post(url, headers=headers, data=form, timeout=15)
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
     if r.status_code != 200:
+        # 把後端的回覆原樣丟出，便於除錯
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
+
 
 def auth_gate(require_login: bool = True):
     """門神：Google（Code+PKCE，verifier 夾在 redirect_to）＋ Email/密碼。"""
