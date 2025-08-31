@@ -72,7 +72,7 @@ def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
 
 def auth_gate(require_login: bool = True):
     """門神：處理 OAuth fragment、Google 連結、Email 註冊/登入、登出等。"""
-    # 1) 先把 #fragment 搬到 ?query（Python 才讀得到）→【已替換成強制 reload 版】
+    # 1) 先把 #fragment 搬到 ?query（Python 才讀得到）→ 強制 reload 版本
     components.html("""
     <script>
     (function () {
@@ -93,7 +93,7 @@ def auth_gate(require_login: bool = True):
     </script>
     """, height=0)
 
-    # 2) Google 登入連結 →【已加入 response_type=token 並保證結尾 /】
+    # 2) Google 登入連結（加 response_type=token，並確保結尾 /）
     redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
     if not redirect_url.endswith("/"):
         redirect_url += "/"
@@ -121,10 +121,10 @@ def auth_gate(require_login: bool = True):
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # 【這行改成同分頁 <a> 連結，避免 iframe 被擋】
+        # 👉 用 target="_top" 在「整個分頁」導向 Google（避免在 iframe 內被擋）
         st.markdown(
             f'''
-            <a href="{login_url}" target="_self" style="
+            <a href="{login_url}" target="_top" style="
                display:inline-block;padding:10px 14px;border-radius:8px;
                border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
                使用 Google 登入
@@ -205,7 +205,6 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
-
 
 # ✅ 啟用門神（未登入就無法操作）
 user = auth_gate(require_login=True)
