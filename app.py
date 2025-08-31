@@ -123,19 +123,24 @@ def auth_gate(require_login: bool = True):
                  "且 Supabase 的 Site URL / Redirect URLs 與 [app].redirect_url 完全一致（含結尾 `/`）。")
 
     # 未登入 → 顯示登入 UI（Google + Email/密碼）
+    # 4) 未登入 → 顯示登入 UI（Google + Email/密碼）
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # C) 用 components.html 按鈕，點擊時在『整個分頁』導向 Google
-        components.html(f"""
-        <div>
-          <button onclick="window.top.location.href='{login_url}'"
-                  style="padding:10px 14px;border-radius:8px;border:1px solid #444;
-                         background:#1f6feb;color:#fff;cursor:pointer;">
+        # ✅ 用 <a> 連結 + onclick window.open，保證左鍵也會在『新分頁』開啟
+        st.markdown(
+            f'''
+            <a href="{login_url}"
+            target="_blank" rel="noopener noreferrer"
+            onclick="window.open('{login_url}', '_blank', 'noopener,noreferrer'); return false;"
+            style="
+                display:inline-block; padding:10px 14px; border-radius:8px;
+                border:1px solid #444; background:#1f6feb; color:#fff; text-decoration:none;">
             使用 Google 登入
-          </button>
-        </div>
-        """, height=60)
+            </a>
+            ''',
+            unsafe_allow_html=True
+        )
 
         with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
             st.caption("第一次使用可直接註冊；成功後自動登入。")
