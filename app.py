@@ -76,17 +76,26 @@ def _make_pkce_pair():
 
 def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
     """
-    用 authorization code + code_verifier 換 access_token
+    用 authorization code + code_verifier 向 Supabase 換 access_token。
+    正確的 payload key 必須是 "code" 與 "code_verifier"。
     """
     url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=authorization_code"
     headers = {
         "apikey": st.secrets["supabase"]["anon_key"],
+        # Authorization header 可加可不加，但加上更保險
+        "Authorization": f"Bearer {st.secrets['supabase']['anon_key']}",
         "Content-Type": "application/json",
     }
-    payload = {"auth_code": auth_code, "code_verifier": code_verifier}
+    payload = {
+        "code": auth_code,               # ← 關鍵：不是 auth_code，而是 code
+        "code_verifier": code_verifier,  # ← 關鍵：必須是 code_verifier
+    }
     r = requests.post(url, headers=headers, json=payload, timeout=15)
-    r.raise_for_status()
+    if r.status_code != 200:
+        # 把後端回覆一起拋出，之後好除錯
+        raise Exception(f"{r.status_code} {r.text}")
     return r.json()
+
 
 def auth_gate(require_login: bool = True):
     """
