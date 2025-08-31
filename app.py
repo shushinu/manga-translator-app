@@ -37,7 +37,7 @@ except Exception as e:
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # ===========================================
-# 🔐 混合登入（Authorization Code + PKCE，verifier 內嵌在 state）
+# 🔐 混合登入（Authorization Code + PKCE，verifier 放在 redirect_to 的 query）
 # ===========================================
 def _set_sb_auth_with_token(token: str):
     try:
@@ -71,30 +71,17 @@ def _b64url_encode(b: bytes) -> str:
     import base64
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
-def _b64url_decode_to_json(s: str) -> dict:
-    import base64, json
-    try:
-        pad = "=" * ((4 - len(s) % 4) % 4)
-        return json.loads(base64.urlsafe_b64decode((s + pad).encode()))
-    except Exception:
-        return {}
-
 def _sha256_b64url(text: str) -> str:
     import hashlib
     return _b64url_encode(hashlib.sha256(text.encode()).digest())
 
-def _make_pkce_state_payload() -> dict:
-    """產生 {verifier, challenge, state_token}，其中 state_token 內含 verifier。"""
-    import os, json, time
+def _make_pkce_pair():
+    import os
     verifier = _b64url_encode(os.urandom(32))
     challenge = _sha256_b64url(verifier)
-    # 把 verifier 直接塞進 state，避免依賴 session_state 跨分頁
-    state_obj = {"v": verifier, "t": int(time.time())}
-    state_token = _b64url_encode(json.dumps(state_obj, ensure_ascii=False).encode())
-    return {"verifier": verifier, "challenge": challenge, "state_token": state_token}
+    return verifier, challenge
 
 def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
-    """用 code + verifier 向 Supabase 換 access_token。"""
     url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=authorization_code"
     headers = {
         "apikey": st.secrets["supabase"]["anon_key"],
@@ -106,17 +93,15 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
     return r.json()
 
 def auth_gate(require_login: bool = True):
-    """門神：Google（Code+PKCE，verifier 放 state）＋ Email/密碼。"""
+    """門神：Google（Code+PKCE，verifier 夾在 redirect_to）＋ Email/密碼。"""
     qp = st.query_params
 
-    # A) OAuth 回來：有 ?code= 時 → 從 state 解出 verifier，直接交換 access_token
+    # A) OAuth 回來：?code=...，同時我們期待有 ?pv=...（verifier）
     if "code" in qp:
         code = qp.get("code")
-        state_raw = qp.get("state", "")
-        state_obj = _b64url_decode_to_json(state_raw)
-        verifier = state_obj.get("v")
+        verifier = qp.get("pv", "")  # 我們自己放在 redirect_to 的參數
         if not verifier:
-            st.error("OAuth 回來的 state 缺少 verifier，請重試。")
+            st.error("OAuth 回來缺少 verifier（pv），請重試。")
         else:
             try:
                 data = _exchange_code_for_session(code, verifier)
@@ -133,6 +118,7 @@ def auth_gate(require_login: bool = True):
                 st.error(f"交換 access_token 發生錯誤：{e}")
 
     elif "error" in qp:
+        # 這是 Supabase 先擋掉（例如 invalid state），直接顯示並清除
         st.warning(f"OAuth 回應：{qp.get('error_description', qp.get('error'))}")
         st.query_params.clear()
 
@@ -140,25 +126,30 @@ def auth_gate(require_login: bool = True):
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # 產生當次用的 PKCE + state（verifier 會被包在 state_token）
-        pkce = _make_pkce_state_payload()
+        # 產生 PKCE
+        verifier, challenge = _make_pkce_pair()
 
+        # 你的公開網址（與 Supabase Site URL / Redirect URLs 完全一致，包含最後的 /）
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
 
-        # 授權連結（Authorization Code + PKCE）
+        # 把 verifier 放在 redirect_to 的 query：?pv=...
+        # 要考慮已有 query 的情況
+        sep = "&" if ("?" in redirect_url) else "?"
+        redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}"
+
+        # 不帶 state，讓 Supabase 自己處理；我們只帶 PKCE challenge
         login_url = (
             f"{st.secrets['supabase']['url']}/auth/v1/authorize"
             f"?provider=google"
             f"&response_type=code"
-            f"&code_challenge={urllib.parse.quote(pkce['challenge'])}"
+            f"&code_challenge={urllib.parse.quote(challenge)}"
             f"&code_challenge_method=S256"
-            f"&state={urllib.parse.quote(pkce['state_token'])}"
-            f"&redirect_to={urllib.parse.quote(redirect_url)}"
+            f"&redirect_to={urllib.parse.quote(redirect_with_pv)}"
         )
 
-        # 開新分頁最穩（避免 iframe sandbox）
+        # 在「新分頁」開啟最穩（避免 iframe sandbox）
         st.markdown(
             f'''
             <a href="{login_url}"
@@ -183,7 +174,8 @@ def auth_gate(require_login: bool = True):
                 reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="reg_pw")
                 reg_pw2 = st.text_input("再次輸入密碼", type="password", key="reg_pw2")
                 if st.button("註冊並登入", key="btn_register"):
-                    if not re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
+                    import re as _re
+                    if not _re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
                         st.warning("Email 格式不正確。")
                     elif not reg_pw or len(reg_pw) < 6:
                         st.warning("密碼至少 6 個字元。")
@@ -243,6 +235,7 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
+
 
 # ✅ 啟用門神（未登入就無法操作）
 user = auth_gate(require_login=True)
