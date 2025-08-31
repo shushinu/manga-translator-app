@@ -220,6 +220,10 @@ def auth_gate(require_login: bool = True, show_debug: bool = False):
 
     return st.session_state["user"]
 
+
+# ✅ 啟用門神（未登入就無法操作）
+user = auth_gate(require_login=True)
+
 # ===========================================
 # 字型與 UI 設定
 # ===========================================
