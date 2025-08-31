@@ -37,18 +37,15 @@ except Exception as e:
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
 # ===========================================
-# 🔐 混合登入：Fragment→Query + Google OAuth + Email/密碼
-#   放在任何 UI 之前（門神）
+# 🔐 混合登入（改用 Authorization Code + PKCE）
 # ===========================================
 def _set_sb_auth_with_token(token: str):
-    """讓後續對資料表的操作帶有「登入者身分」（RLS 才會生效）"""
     try:
         sb.postgrest.auth(token)
     except Exception:
         pass
 
 def _fetch_supabase_user(access_token: str) -> dict:
-    """用 access_token 直接向 Supabase Auth 取使用者資訊"""
     resp = requests.get(
         f"{st.secrets['supabase']['url']}/auth/v1/user",
         headers={
@@ -63,80 +60,110 @@ def _fetch_supabase_user(access_token: str) -> dict:
 def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
     full_name = (auth_user.get("user_metadata") or {}).get("full_name") or auth_user.get("email", "Guest")
     return {
-        "id": auth_user.get("id"),           # Supabase auth.users.id (uuid)
+        "id": auth_user.get("id"),
         "email": auth_user.get("email"),
         "full_name": full_name,
         "provider": provider,
         "access_token": access_token,
     }
 
+def _ensure_pkce_state():
+    """在 session 產生並保存 PKCE verifier/challenge 與 state。"""
+    import os, hashlib, base64
+    def b64url(b: bytes) -> str:
+        return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+    if "oauth_pkce" not in st.session_state:
+        verifier = b64url(os.urandom(32))
+        challenge = b64url(hashlib.sha256(verifier.encode()).digest())
+        state = b64url(os.urandom(16))
+        st.session_state["oauth_pkce"] = {
+            "verifier": verifier,
+            "challenge": challenge,
+            "state": state,
+        }
+    return st.session_state["oauth_pkce"]
+
+def _exchange_code_for_session(auth_code: str, code_verifier: str) -> dict:
+    """用 code + verifier 向 Supabase 交換 session（access_token）。"""
+    url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=authorization_code"
+    headers = {
+        "apikey": st.secrets["supabase"]["anon_key"],
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "auth_code": auth_code,
+        "code_verifier": code_verifier,
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
 def auth_gate(require_login: bool = True):
-    """門神：處理 OAuth fragment、Google 連結、Email 註冊/登入、登出等。"""
+    """門神：Google（Code+PKCE）＋ Email/密碼。"""
+    # A) 若回來有 `?code=`，就交換 access_token
+    qp = st.query_params
+    if "code" in qp:
+        code = qp.get("code")
+        cb_state = qp.get("state", "")
+        pkce = st.session_state.get("oauth_pkce") or {}
+        expected_state = pkce.get("state", "")
 
-    # A) 把 #fragment 搬到 ?query（只讀 window，本頁即可；並強制 reload）
-    components.html("""
-    <script>
-    (function () {
-      try {
-        const loc = window.location;               // ✅ 不讀 window.top，避免跨網域權限被擋
-        const hash = loc.hash ? loc.hash.substring(1) : "";
-        if (!hash) return;
-        const hp = new URLSearchParams(hash);
-        const qp = new URLSearchParams(loc.search);
-        let changed = false;
-        for (const [k, v] of hp.entries()) { qp.set(k, v); changed = true; }
-        if (!changed) return;
-        const newUrl = loc.origin + loc.pathname + "?" + qp.toString();
-        window.history.replaceState({}, "", newUrl);
-        loc.href = newUrl;                          // 立即刷新：讓 Python 看到 ?access_token
-      } catch (e) {}
-    })();
-    </script>
-    """, height=0)
+        if not expected_state or cb_state != expected_state:
+            st.error("OAuth 驗證失敗：state 不一致，請再試一次。")
+        else:
+            try:
+                data = _exchange_code_for_session(code, pkce["verifier"])
+                access_token = data.get("access_token")
+                user_json = data.get("user") or {}
+                if not access_token:
+                    st.error(f"交換 access_token 失敗：{data}")
+                else:
+                    st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
+                    _set_sb_auth_with_token(access_token)
+                    # 清掉網址參數，避免外洩 / 反覆觸發
+                    st.query_params.clear()
+                    st.rerun()
+            except Exception as e:
+                st.error(f"交換 access_token 發生錯誤：{e}")
 
-    # B) Google 登入連結（加 response_type=token，並確保 redirect_url 以 / 結尾）
-    redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
-    if not redirect_url.endswith("/"):
-        redirect_url += "/"
-    login_url = (
-        f"{st.secrets['supabase']['url']}/auth/v1/authorize"
-        f"?provider=google&response_type=token&redirect_to={urllib.parse.quote(redirect_url)}"
-    )
+    elif "error" in qp:
+        # 若 OAuth 回傳錯誤，顯示並清除
+        st.warning(f"OAuth 回應：{qp.get('error_description', qp.get('error'))}")
+        st.query_params.clear()
 
-    # 讀取 query：拿到 access_token 就登入
-    query_params = st.query_params
-    if "access_token" in query_params:
-        access_token = query_params.get("access_token")
-        try:
-            user_json = _fetch_supabase_user(access_token)
-            st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
-            _set_sb_auth_with_token(access_token)
-            st.success(f"👋 歡迎，{st.session_state['user']['full_name']}！")
-        except Exception as e:
-            st.warning(f"登入驗證失敗：{e}")
-        finally:
-            st.query_params.clear()  # 清掉網址上的 token
-
-    elif "code" in query_params:
-        # 若誤用到 code flow，這裡會提示（理論上現在不會看到）
-        st.error("Google 回傳的是 `code`，不是 `access_token`。請確認連結包含 `response_type=token`，"
-                 "且 Supabase 的 Site URL / Redirect URLs 與 [app].redirect_url 完全一致（含結尾 `/`）。")
-
-    # 未登入 → 顯示登入 UI（Google + Email/密碼）
-    # 4) 未登入 → 顯示登入 UI（Google + Email/密碼）
+    # B) 未登入 → 顯示登入 UI
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
 
-        # ✅ 用 <a> 連結 + onclick window.open，保證左鍵也會在『新分頁』開啟
+        # 準備 PKCE 與 state
+        pkce = _ensure_pkce_state()
+
+        # 產生 Google OAuth 授權連結（Code + PKCE）
+        redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
+        if not redirect_url.endswith("/"):
+            redirect_url += "/"
+
+        # 使用 Authorization Code + PKCE（query 會回 ?code=...）
+        login_url = (
+            f"{st.secrets['supabase']['url']}/auth/v1/authorize"
+            f"?provider=google"
+            f"&response_type=code"
+            f"&code_challenge={urllib.parse.quote(pkce['challenge'])}"
+            f"&code_challenge_method=S256"
+            f"&state={urllib.parse.quote(pkce['state'])}"
+            f"&redirect_to={urllib.parse.quote(redirect_url)}"
+        )
+
+        # 開新分頁最穩（不受 iframe sandbox 限制）
         st.markdown(
             f'''
             <a href="{login_url}"
-            target="_blank" rel="noopener noreferrer"
-            onclick="window.open('{login_url}', '_blank', 'noopener,noreferrer'); return false;"
-            style="
-                display:inline-block; padding:10px 14px; border-radius:8px;
-                border:1px solid #444; background:#1f6feb; color:#fff; text-decoration:none;">
-            使用 Google 登入
+               target="_blank" rel="noopener noreferrer"
+               onclick="window.open('{login_url}', '_blank', 'noopener,noreferrer'); return false;"
+               style="display:inline-block;padding:10px 14px;border-radius:8px;
+                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
+               使用 Google 登入
             </a>
             ''',
             unsafe_allow_html=True
@@ -201,7 +228,7 @@ def auth_gate(require_login: bool = True):
         else:
             return None
 
-    # 已登入 UI（顯示資訊 + 登出）
+    # C) 已登入 → 顯示狀態 + 登出
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
     if st.button("🔓 登出"):
         try:
@@ -213,6 +240,7 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
+
 
 
 # ✅ 啟用門神（未登入就無法操作）
