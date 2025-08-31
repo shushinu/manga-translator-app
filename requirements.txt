@@ -2,4 +2,4 @@ streamlit
 openai
 Pillow
 supabase
-streamlit-supabase-auth
+requests
