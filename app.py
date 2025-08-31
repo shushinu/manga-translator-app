@@ -36,19 +36,18 @@ except Exception as e:
 # ===========================================
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
-# ===========================================
-# 🔐 混合登入：Fragment→Query + Google OAuth + Email/密碼
-#   放在任何 UI 之前（門神）
-# ===========================================
+# =========================
+# 🔐 混合登入（取代舊版）
+# =========================
 def _set_sb_auth_with_token(token: str):
-    """讓後續對資料表的操作帶有「登入者身分」（RLS 才會生效）"""
+    """讓後續 PostgREST 用登入者身分（RLS 才會生效）"""
     try:
         sb.postgrest.auth(token)
     except Exception:
         pass
 
 def _fetch_supabase_user(access_token: str) -> dict:
-    """用 access_token 直接向 Supabase Auth 取使用者資訊"""
+    """用 access_token 向 Supabase Auth 取使用者資訊"""
     resp = requests.get(
         f"{st.secrets['supabase']['url']}/auth/v1/user",
         headers={
@@ -61,51 +60,69 @@ def _fetch_supabase_user(access_token: str) -> dict:
     return resp.json()
 
 def _user_from_auth(auth_user: dict, access_token: str, provider: str) -> dict:
-    full_name = (auth_user.get("user_metadata") or {}).get("full_name") or auth_user.get("email", "Guest")
+    meta = auth_user.get("user_metadata") or {}
+    full_name = meta.get("full_name") or auth_user.get("email", "Guest")
     return {
-        "id": auth_user.get("id"),           # Supabase auth.users.id (uuid)
+        "id": auth_user.get("id"),      # Supabase auth.users.id (uuid)
         "email": auth_user.get("email"),
         "full_name": full_name,
         "provider": provider,
         "access_token": access_token,
     }
 
-def auth_gate(require_login: bool = True):
-    """門神：處理 OAuth fragment、Google 連結、Email 註冊/登入、登出等。"""
-    # 1) 先把 #fragment 搬到 ?query（Python 才讀得到）
+def _google_login_button(url: str):
+    """同分頁導向的 Google 登入按鈕"""
+    components.html(f"""
+    <div style="display:inline-block;">
+      <button onclick="window.location.href='{url}'"
+              style="padding:10px 14px;border-radius:8px;border:1px solid #444;background:#1f6feb;color:#fff;cursor:pointer;">
+        使用 Google 登入
+      </button>
+    </div>
+    """, height=50)
+
+def auth_gate(require_login: bool = True, show_debug: bool = False):
+    """
+    門神：處理 Google OAuth（implicit token flow）＋ Email/密碼登入。
+    - 自動把 #access_token 搬到 ?access_token，並強制 reload 讓後端讀得到。
+    - 登入連結帶 response_type=token，避免回 code。
+    """
+    # A) Fragment → Query 並強制刷新（關鍵）
     components.html("""
     <script>
     (function () {
       try {
-        const top = window.top;
-        if (!top || !top.location) return;
-        const hash = top.location.hash ? top.location.hash.substring(1) : "";
+        const loc = window.location;
+        const hash = loc.hash ? loc.hash.substring(1) : "";
         if (!hash) return;
         const hp = new URLSearchParams(hash);
-        const qp = new URLSearchParams(top.location.search);
+        const qp = new URLSearchParams(loc.search);
         let changed = false;
-        for (const [k, v] of hp.entries()) { qp.set(k, v); changed = true; }
-        if (changed) {
-          top.history.replaceState({}, "", top.location.pathname + "?" + qp.toString());
-          top.location.hash = "";
-          window.parent.postMessage(
-            Object.assign({type: "streamlit:setQueryParams"}, Object.fromEntries(qp.entries())),
-            "*"
-          );
-        }
-      } catch (e) { /* ignore */ }
+        for (const [k, v] of hp.entries()) {{ qp.set(k, v); changed = true; }}
+        if (!changed) return;
+        const newUrl = loc.origin + loc.pathname + "?" + qp.toString();
+        window.history.replaceState({}, "", newUrl);
+        loc.href = newUrl;  // 立即 reload：讓 Python 看到 ?access_token
+      } catch (e) { }
     })();
     </script>
     """, height=0)
 
-    # 2) Google 登入連結
+    # B) 準備 Google 登入連結（強制 implicit flow）
     redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
-    login_url = f"{st.secrets['supabase']['url']}/auth/v1/authorize?provider=google&redirect_to={urllib.parse.quote(redirect_url)}"
+    if not redirect_url.endswith("/"):
+        redirect_url += "/"
+    login_url = (
+        f"{st.secrets['supabase']['url']}/auth/v1/authorize"
+        f"?provider=google"
+        f"&redirect_to={urllib.parse.quote(redirect_url)}"
+        f"&response_type=token"  # ⬅️ 關鍵：要求回 access_token（非 code）
+    )
 
-    # 3) 若 URL query 有 access_token（多半來自 Google OAuth）
-    query_params = st.query_params
-    if "access_token" in query_params:
-        access_token = query_params.get("access_token")
+    # C) 讀取 query：拿到 access_token 就登入
+    qp = st.query_params
+    if "access_token" in qp:
+        access_token = qp.get("access_token")
         try:
             user_json = _fetch_supabase_user(access_token)
             st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
@@ -114,19 +131,23 @@ def auth_gate(require_login: bool = True):
         except Exception as e:
             st.warning(f"登入驗證失敗：{e}")
         finally:
-            # ✅ 清掉網址上的 query（含 token），避免外洩
-            st.query_params.clear()
+            st.query_params.clear()  # 清掉網址上的 token
 
-    # 4) 未登入 → 顯示登入 UI（Google + Email/密碼）
+    elif "code" in qp:
+        # 偵錯用：若看到 code，代表還在 Authorization Code Flow
+        st.error("Google 回傳的是 `code`，不是 `access_token`。請確認連結包含 `response_type=token`，"
+                 "且 Supabase 的 Site URL / Redirect URLs 與 [app].redirect_url 完全一致（含結尾的 `/`）。")
+
+    # D) 未登入 → 顯示登入 UI（Google + Email/密碼）
     if "user" not in st.session_state:
         st.markdown("### 🔐 請先登入")
-        st.markdown(f"[使用 Google 登入]({login_url})")
+        _google_login_button(login_url)
 
         with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
             st.caption("第一次使用可直接註冊；成功後自動登入。")
             colL, colR = st.columns(2)
 
-            # ---- 註冊 ----
+            # 註冊
             with colL:
                 st.markdown("**註冊新帳號**")
                 reg_email = st.text_input("Email（用來登入）", key="reg_email")
@@ -155,7 +176,7 @@ def auth_gate(require_login: bool = True):
                         except Exception as e:
                             st.error(f"註冊失敗：{e}")
 
-            # ---- 登入 ----
+            # 登入
             with colR:
                 st.markdown("**已註冊直接登入**")
                 login_email = st.text_input("Email", key="login_email")
@@ -176,13 +197,17 @@ def auth_gate(require_login: bool = True):
                     except Exception as e:
                         st.error(f"登入失敗：{e}")
 
-        # 強制登入才能用
+        if show_debug:
+            with st.expander("DEBUG（暫時）", expanded=False):
+                st.write("query_params:", dict(st.query_params))
+                st.write("session_state.user:", st.session_state.get("user"))
+
         if require_login:
             st.stop()
         else:
             return None
 
-    # 5) 已登入 UI（顯示資訊 + 登出）
+    # E) 已登入：顯示狀態 + 登出
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
     if st.button("🔓 登出"):
         try:
@@ -194,9 +219,6 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
     return st.session_state["user"]
-
-# ✅ 啟用門神（未登入就無法操作）
-user = auth_gate(require_login=True)
 
 # ===========================================
 # 字型與 UI 設定
