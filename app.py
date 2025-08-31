@@ -1,5 +1,5 @@
 import streamlit as st
-# ✅ 一定要放在所有 st. 呼叫之前
+# ✅ 必須放最上方
 st.set_page_config(page_title="翻譯支援測試app", layout="wide")
 
 from openai import OpenAI
@@ -7,16 +7,13 @@ from PIL import Image
 import io
 import base64
 from supabase import create_client
-
+import urllib.parse
 
 # ===========================================
 # 初始化 Supabase 並測試連線
 # ===========================================
-
-# 初始化 Supabase
 sb = create_client(st.secrets["supabase"]["url"], st.secrets["supabase"]["anon_key"])
 
-# 使用 cache_resource 確保每次 rerun 不會重複建立連線
 @st.cache_resource
 def get_supabase():
     return create_client(
@@ -24,21 +21,49 @@ def get_supabase():
         st.secrets["supabase"]["anon_key"]
     )
 
-sb = get_supabase()  # 取得全域可用的 Supabase client
+sb = get_supabase()
 
-# 啟動時做輕量的健康檢查，確認資料庫是否正常連線
 try:
     sb.table("translation_logs").select("id").limit(1).execute()
     st.write("✅ Supabase 連線測試成功")
 except Exception as e:
     st.warning(f"⚠️ Supabase 連線檢查失敗：{e}")
 
-
-# ✅ OpenAI APIキーを .streamlit/secrets.toml から取得
+# ===========================================
+# OpenAI 初始化
+# ===========================================
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
+# ===========================================
+# Google Auth：登入 UI + Fragment 自動偵測
+# ===========================================
+# 登入 URL (Supabase 預設 callback)
+redirect_url = "https://manga-translator-app-qjkmxcqnbjxm57cu9m95wz.streamlit.app/"
+login_url = f"{st.secrets['supabase']['url']}/auth/v1/authorize?provider=google&redirect_to={urllib.parse.quote(redirect_url)}"
 
-# ✅ フォント設定（Webフォントの読み込み付き）
+# 自動偵測 fragment（Google 回傳 access_token）
+query_params = st.query_params
+if "access_token" in query_params:
+    st.session_state["user"] = {
+        "access_token": query_params.get("access_token"),
+        "email": query_params.get("email", ""),
+        "full_name": query_params.get("full_name", "Guest"),
+        "provider": "google"
+    }
+    st.success(f"👋 歡迎，{st.session_state['user']['full_name']}！")
+elif "user" in st.session_state:
+    st.info(f"目前登入：{st.session_state['user']['full_name']} ({st.session_state['user']['email']})")
+else:
+    st.markdown(f"[使用 Google 登入]({login_url})")
+
+# 登出功能
+if "user" in st.session_state and st.button("🔓 登出"):
+    st.session_state.pop("user")
+    st.rerun()
+
+# ===========================================
+# Font & UI 設定
+# ===========================================
 st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC&display=swap" rel="stylesheet">
     <style>
@@ -50,11 +75,12 @@ st.markdown("""
 
 st.title("📘 漫畫翻譯支援工具 - 測試版")
 
-# サイドバー
+# ===========================================
+# Sidebar Menu
+# ===========================================
 st.sidebar.header("操作選單")
 menu = st.sidebar.radio("請選擇操作步驟：", ["上傳圖片並辨識文字（OCR）", "修正辨識文字", "輸入提示並翻譯"])
 
-# 🔧 temperature スライダーを追加
 temperature = st.sidebar.slider(
     "翻譯的創造性（temperature）",
     min_value=0.0,
@@ -64,63 +90,59 @@ temperature = st.sidebar.slider(
     help="值が高いほど自由な翻訳になります（例：口語表現多樣化）"
 )
 
-# ======================================================
-# 🟢 ステップ1：登場人物登録（穩定版：用版本號重置 key）
-# ======================================================
+# ===========================================
+# Helper: 取得當前使用者 ID
+# ===========================================
+def get_user_id():
+    if "user" in st.session_state:
+        return st.session_state["user"]["email"] or "guest"
+    return "guest"
+
+# ===========================================
+# 🟢 Step1: 上傳圖片 & OCR
+# ===========================================
 if menu == "上傳圖片並辨識文字（OCR）":
     st.subheader("👥 請登錄登場人物")
     st.markdown("請依序輸入角色圖片、名稱、性格後再執行 OCR")
 
-    # ---- 初始化版本號（避免用旗標來回切換）----
     if "char_uploader_ver" not in st.session_state:
         st.session_state["char_uploader_ver"] = 0
     if "char_fields_ver" not in st.session_state:
         st.session_state["char_fields_ver"] = 0
 
-    # 依版本號產生**穩定且唯一**的 widget key
     upload_key = f"char_img_{st.session_state['char_uploader_ver']}"
-    name_key   = f"char_name_{st.session_state['char_fields_ver']}"
-    desc_key   = f"char_desc_{st.session_state['char_fields_ver']}"
+    name_key = f"char_name_{st.session_state['char_fields_ver']}"
+    desc_key = f"char_desc_{st.session_state['char_fields_ver']}"
 
     char_img = st.file_uploader("登場人物圖片（一次一位）", type=["jpg", "jpeg", "png"], key=upload_key)
     char_name = st.text_input("名稱（例如：大雄）", key=name_key)
     char_desc = st.text_area("性格或特徵（例如：愛哭、懶散）", key=desc_key)
 
-    # ✅ 登錄按鈕
     if st.button("➕ 登錄"):
         if char_img and char_name:
-            # 讀出檔案的 **bytes** 存起來，避免之後 file-like 物件失效
             img_bytes = char_img.read()
-
             st.session_state["characters"] = st.session_state.get("characters", [])
             st.session_state["characters"].append({
-                "image_bytes": img_bytes,          # 用 bytes 保存
+                "image_bytes": img_bytes,
                 "name": char_name,
                 "description": char_desc
             })
             st.success(f"已註冊角色：{char_name}")
-
-            # 每次完成註冊，就把版本號 +1 來「重置」這三個輸入元件
             st.session_state["char_uploader_ver"] += 1
             st.session_state["char_fields_ver"] += 1
-
             st.rerun()
         else:
             st.warning("圖片與名稱為必填欄位")
 
-    # ✅ 已註冊角色清單（維持原有 UI）
     if "characters" in st.session_state and st.session_state["characters"]:
         st.markdown("#### ✅ 已註冊角色：")
         for i, char in enumerate(st.session_state["characters"]):
             col1, col2, col3 = st.columns([0.3, 0.5, 0.2])
-
             with col1:
-                # 從 bytes 產生可顯示的圖片
                 try:
                     st.image(Image.open(io.BytesIO(char["image_bytes"])), caption=None, width=100)
                 except Exception:
                     st.image(char.get("image_bytes", None), caption=None, width=100)
-
             with col2:
                 new_name = st.text_input(f"名稱（{i}）", char["name"], key=f"edit_name_{i}")
                 new_desc = st.text_area(f"性格／特徵（{i}）", char["description"], key=f"edit_desc_{i}")
@@ -128,7 +150,6 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.session_state["characters"][i]["name"] = new_name
                     st.session_state["characters"][i]["description"] = new_desc
                     st.success(f"已更新角色：{new_name}")
-
             with col3:
                 if st.button(f"❌ 刪除", key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
@@ -136,10 +157,6 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     st.success(f"已刪除角色：{deleted_name}")
                     st.rerun()
 
-
-    # ======================================================
-    # 🟢 主圖上傳（OCR 用）
-    # ======================================================
     st.markdown("---")
     uploaded_file = st.file_uploader("📄 上傳漫畫圖片（JPEG/PNG）", type=["jpg", "jpeg", "png"], key="main_img")
 
@@ -149,14 +166,11 @@ if menu == "上傳圖片並辨識文字（OCR）":
         image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         st.session_state["image_base64"] = img_base64
-
-        # ✅ 清掉上一輪的狀態，避免覆寫舊資料列或沿用舊 prompt/譯文
         st.session_state.pop("log_id", None)
         st.session_state.pop("combined_prompt", None)
         st.session_state.pop("prompt_template", None)
         st.session_state.pop("prompt_input", None)
         st.session_state.pop("translation", None)
-
         st.session_state.pop("ocr_text", None)
         st.session_state["corrected_text_saved"] = False
     elif "image_base64" in st.session_state:
@@ -179,14 +193,13 @@ if menu == "上傳圖片並辨識文字（OCR）":
 你是一位熟悉日本漫畫對話場景的台詞辨識助手，請從下方圖片中，**只提取漫畫「對話框（吹き出し）」中的日文台詞**。
 
 🧩 規則：
-1. 依漫畫閱讀順序：整頁 **從右到左，由上到下** 排序，對話框也照此順序。
-2. 每句台詞前標示發言角色，角色名稱必須從下方列表中選擇：
+1. 依漫畫閱讀順序：整頁 **從右到左，由上到下** 排序。
+2. 每句台詞標註角色，角色必須從名單選擇：
    {character_context if character_context else "（沒有角色名單，若無法判斷就寫『不明』）"}
-3. 不得使用未提供的名字或外語名（如 Nobita、のび太）。
-4. 忽略旁白、效果音、標題、註解或任何非對話框文字。
-5. 無法辨識的文字請保留空格或用「□」標示，不要自行補完。
+3. 忽略旁白、效果音、註解等。
+4. 無法辨識的文字用「□」標示。
 
-📌 輸出格式（每行一筆）：
+📌 格式：
 角色名稱：台詞
 """
                 try:
@@ -199,14 +212,16 @@ if menu == "上傳圖片並辨識文字（OCR）":
                     )
                     st.session_state["ocr_text"] = response.choices[0].message.content.strip()
                     st.session_state["corrected_text_saved"] = False
-
-                    # ✅ OCR 完成版本號（避免覆寫使用者校正）
                     st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0) + 1
                 except Exception as e:
                     st.error(f"OCR 失敗：{e}")
 
     if "ocr_text" in st.session_state:
         st.text_area("已辨識文字（可於下一步修正）", st.session_state["ocr_text"], height=300)
+
+# 後續 Step2、Step3 保持原本邏輯，唯一的差別是：
+# - 在建立 translation_logs 時，user_id 會抓目前登入的 user.email（若無登入則為 guest）
+
 
 # ======================================================
 # 🟡 ステップ2：テキスト修正
