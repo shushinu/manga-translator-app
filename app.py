@@ -89,9 +89,8 @@ def _make_pkce_pair():
 def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri: str | None = None) -> dict:
     """
     用 authorization code + code_verifier 向 Supabase 換 access_token。
-    重點：
-      1) URL 要帶 ?grant_type=pkce
-      2) Body 用 JSON，欄位是 auth_code / code_verifier（必要），可選 redirect_uri
+      1) URL: ?grant_type=pkce
+      2) Body(JSON): auth_code / code_verifier（必要），可選 redirect_uri
     """
     url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=pkce"
     headers = {
@@ -100,15 +99,14 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri:
         "Content-Type": "application/json",
     }
     payload = {
-        "auth_code": auth_code,          # ← Supabase 這裡要用 auth_code
-        "code_verifier": code_verifier,  # ← PKCE verifier（要與之前的 challenge 對得上）
+        "auth_code": auth_code,
+        "code_verifier": code_verifier,
     }
     if redirect_uri:
         payload["redirect_uri"] = redirect_uri
 
     r = requests.post(url, headers=headers, json=payload, timeout=15)
     if r.status_code != 200:
-        # 把後端的回覆原樣丟出，便於除錯
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
 
@@ -117,11 +115,10 @@ def auth_gate(require_login: bool = True):
     """門神：Google（Code+PKCE，verifier 夾在 redirect_to）＋ Email/密碼。"""
     qp = st.query_params
 
-    # A) OAuth 回來：?code=...，同時我們期待有 ?pv=...（verifier）
+    # A) OAuth 回來：?code=... + 我們在 redirect_to 放的 ?pv=...（verifier）
     if "code" in qp:
         code = qp.get("code")
-        verifier = qp.get("pv", "")  # 我們自己放在 redirect_to 的參數
-        # 重新組出當時 authorize 使用的 redirect_uri（要一模一樣）
+        verifier = qp.get("pv", "")
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
@@ -146,13 +143,12 @@ def auth_gate(require_login: bool = True):
                 st.error(f"交換 access_token 發生錯誤：{e}")
 
     elif "error" in qp:
-        # 這是 Supabase 先擋掉（例如 invalid state），直接顯示並清除
         st.warning(f"OAuth 回應：{qp.get('error_description', qp.get('error'))}")
         st.query_params.clear()
 
     # B) 未登入 → 顯示登入 UI
     if "user" not in st.session_state:
-        # 未登入時一律切回 anon key（避免沿用過期 JWT）
+        # 切回 anon key，避免沿用過期 JWT
         try:
             sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
@@ -160,19 +156,17 @@ def auth_gate(require_login: bool = True):
 
         st.markdown("### 🔐 請先登入")
 
-        # 產生 PKCE（每次顯示登入頁都重生一組）
+        # 產生 PKCE
         verifier, challenge = _make_pkce_pair()
 
-        # 你的公開網址（與 Supabase Site URL / Redirect URLs 完全一致，**包含最後的 /**）
+        # redirect_with_pv
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
-
-        # 把 verifier 放在 redirect_to 的 query：?pv=...
         sep = "&" if ("?" in redirect_url) else "?"
         redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}"
 
-        # 不帶 state，讓 Supabase 自己處理；我們只帶 PKCE challenge
+        # Google OAuth 連結
         login_url = (
             f"{st.secrets['supabase']['url']}/auth/v1/authorize"
             f"?provider=google"
@@ -182,29 +176,47 @@ def auth_gate(require_login: bool = True):
             f"&redirect_to={urllib.parse.quote(redirect_with_pv)}"
         )
 
-        # 同分頁導轉（避免被瀏覽器擋彈窗）
-        st.markdown(
-            f'''
-            <a href="{login_url}"
-               style="display:inline-block;padding:10px 14px;border-radius:8px;
-                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
-               使用 Google 登入
-            </a>
-            ''',
-            unsafe_allow_html=True
-        )
+        # === 新版登入 UI：Email 在上、Google 在下；註冊按鈕點了才展開 ===
+        st.markdown("#### 使用 Email 登入")
 
-        with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
-            st.caption("第一次使用可直接註冊；成功後自動登入。")
-            colL, colR = st.columns(2)
+        # Email 登入（form 避免輸入中 rerun）  ← 加上唯一表單名稱
+        with st.form("auth_login_form", clear_on_submit=False):
+            login_email = st.text_input("Email", key="auth_login_email")
+            login_pw = st.text_input("密碼", type="password", key="auth_login_pw")
+            submit_login = st.form_submit_button("登入")
+            if submit_login:
+                try:
+                    res = sb.auth.sign_in_with_password({"email": login_email, "password": login_pw})
+                    session = getattr(res, "session", None)
+                    user = getattr(res, "user", None)
+                    if not (session and user):
+                        st.error("登入失敗，請檢查帳密或是否已完成信箱驗證。")
+                    else:
+                        token = session.access_token
+                        _set_sb_auth_with_token(token)
+                        st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
+                        st.success(f"登入成功：{st.session_state['user']['email']}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"登入失敗：{e}")
 
-            # ---- 註冊 ----
-            with colL:
-                st.markdown("**註冊新帳號**")
-                reg_email = st.text_input("Email（用來登入）", key="auth_reg_email")        # ★ key
-                reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="auth_reg_pw")  # ★ key
-                reg_pw2 = st.text_input("再次輸入密碼", type="password", key="auth_reg_pw2")     # ★ key
-                if st.button("註冊並登入", key="auth_btn_register"):  # ★ key
+        # 註冊：預設不顯示，按鈕後展開
+        if "show_register" not in st.session_state:
+            st.session_state["show_register"] = False
+
+        st.caption("還沒有帳號？")
+        if st.button("建立新帳號", key="auth_show_reg_btn"):
+            st.session_state["show_register"] = True
+
+        if st.session_state["show_register"]:
+            st.markdown("---")
+            st.markdown("#### ✨ 註冊新帳號")
+            with st.form("auth_register_form", clear_on_submit=False):
+                reg_email = st.text_input("Email（用來登入）", key="auth_reg_email")
+                reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="auth_reg_pw")
+                reg_pw2 = st.text_input("再次輸入密碼", type="password", key="auth_reg_pw2")
+                submit_reg = st.form_submit_button("註冊並登入")
+                if submit_reg:
                     import re as _re
                     if not _re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
                         st.warning("Email 格式不正確。")
@@ -227,27 +239,23 @@ def auth_gate(require_login: bool = True):
                                 st.info("註冊成功，請前往 Email 收信完成驗證後再登入。")
                         except Exception as e:
                             st.error(f"註冊失敗：{e}")
+            if st.button("回到登入", key="auth_hide_reg_btn"):
+                st.session_state["show_register"] = False
+                st.rerun()
 
-            # ---- 登入 ----
-            with colR:
-                st.markdown("**已註冊直接登入**")
-                login_email = st.text_input("Email", key="auth_login_email")           # ★ key
-                login_pw = st.text_input("密碼", type="password", key="auth_login_pw")  # ★ key
-                if st.button("登入", key="auth_btn_login"):  # ★ key
-                    try:
-                        res = sb.auth.sign_in_with_password({"email": login_email, "password": login_pw})
-                        session = getattr(res, "session", None)
-                        user = getattr(res, "user", None)
-                        if not (session and user):
-                            st.error("登入失敗，請檢查帳密或是否已完成信箱驗證。")
-                        else:
-                            token = session.access_token
-                            _set_sb_auth_with_token(token)
-                            st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
-                            st.success(f"登入成功：{st.session_state['user']['email']}")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"登入失敗：{e}")
+        # Google 放在最下方（沿用既有 login_url / PKCE / redirect_to）
+        st.markdown("---")
+        st.markdown(
+            f'''
+            <a href="{login_url}"
+               style="display:inline-block;padding:10px 14px;border-radius:8px;
+                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
+               使用 Google 登入
+            </a>
+            ''',
+            unsafe_allow_html=True
+        )
+        # === 新版登入 UI 結束 ===
 
         if require_login:
             st.stop()
@@ -256,7 +264,7 @@ def auth_gate(require_login: bool = True):
 
     # C) 已登入 → 顯示狀態 + 登出
     st.info(f"目前登入：{st.session_state['user']['full_name']}（{st.session_state['user']['email']}）")
-    if st.button("🔓 登出", key="auth_btn_logout"):  # ★ key（關鍵修正）
+    if st.button("🔓 登出", key="auth_btn_logout"):   # ← 關鍵修補：加上唯一 key
         try:
             sb.auth.sign_out()
             sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
