@@ -182,29 +182,47 @@ def auth_gate(require_login: bool = True):
             f"&redirect_to={urllib.parse.quote(redirect_with_pv)}"
         )
 
-        # 同分頁導轉（避免被瀏覽器擋彈窗）
-        st.markdown(
-            f'''
-            <a href="{login_url}"
-               style="display:inline-block;padding:10px 14px;border-radius:8px;
-                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
-               使用 Google 登入
-            </a>
-            ''',
-            unsafe_allow_html=True
-        )
+        # === 新版登入 UI：Email 在上、Google 在下；註冊按鈕點了才展開 ===
+        st.markdown("#### 使用 Email 登入")
 
-        with st.expander("或使用 Email / 密碼登入（無需 Google）", expanded=False):
-            st.caption("第一次使用可直接註冊；成功後自動登入。")
-            colL, colR = st.columns(2)
+        # Email 登入（form 避免輸入中就 rerun）
+        with st.form("login_form", clear_on_submit=False):
+            login_email = st.text_input("Email", key="login_email")
+            login_pw = st.text_input("密碼", type="password", key="login_pw")
+            submit_login = st.form_submit_button("登入")
+            if submit_login:
+                try:
+                    res = sb.auth.sign_in_with_password({"email": login_email, "password": login_pw})
+                    session = getattr(res, "session", None)
+                    user = getattr(res, "user", None)
+                    if not (session and user):
+                        st.error("登入失敗，請檢查帳密或是否已完成信箱驗證。")
+                    else:
+                        token = session.access_token
+                        _set_sb_auth_with_token(token)
+                        st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
+                        st.success(f"登入成功：{st.session_state['user']['email']}")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"登入失敗：{e}")
 
-            # ---- 註冊 ----
-            with colL:
-                st.markdown("**註冊新帳號**")
+        # 註冊：預設不顯示，按鈕後展開
+        if "show_register" not in st.session_state:
+            st.session_state["show_register"] = False
+
+        st.caption("還沒有帳號？")
+        if st.button("建立新帳號", key="show_reg_btn"):
+            st.session_state["show_register"] = True
+
+        if st.session_state["show_register"]:
+            st.markdown("---")
+            st.markdown("#### ✨ 註冊新帳號")
+            with st.form("register_form", clear_on_submit=False):
                 reg_email = st.text_input("Email（用來登入）", key="reg_email")
                 reg_pw = st.text_input("密碼（至少 6 字元）", type="password", key="reg_pw")
                 reg_pw2 = st.text_input("再次輸入密碼", type="password", key="reg_pw2")
-                if st.button("註冊並登入", key="btn_register"):
+                submit_reg = st.form_submit_button("註冊並登入")
+                if submit_reg:
                     import re as _re
                     if not _re.match(r"[^@]+@[^@]+\.[^@]+", reg_email or ""):
                         st.warning("Email 格式不正確。")
@@ -227,27 +245,23 @@ def auth_gate(require_login: bool = True):
                                 st.info("註冊成功，請前往 Email 收信完成驗證後再登入。")
                         except Exception as e:
                             st.error(f"註冊失敗：{e}")
+            if st.button("回到登入", key="hide_reg_btn"):
+                st.session_state["show_register"] = False
+                st.rerun()
 
-            # ---- 登入 ----
-            with colR:
-                st.markdown("**已註冊直接登入**")
-                login_email = st.text_input("Email", key="login_email")
-                login_pw = st.text_input("密碼", type="password", key="login_pw")
-                if st.button("登入", key="btn_login"):
-                    try:
-                        res = sb.auth.sign_in_with_password({"email": login_email, "password": login_pw})
-                        session = getattr(res, "session", None)
-                        user = getattr(res, "user", None)
-                        if not (session and user):
-                            st.error("登入失敗，請檢查帳密或是否已完成信箱驗證。")
-                        else:
-                            token = session.access_token
-                            _set_sb_auth_with_token(token)
-                            st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
-                            st.success(f"登入成功：{st.session_state['user']['email']}")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"登入失敗：{e}")
+        # Google 放在最下方（沿用既有 login_url / PKCE / redirect_to）
+        st.markdown("---")
+        st.markdown(
+            f'''
+            <a href="{login_url}"
+               style="display:inline-block;padding:10px 14px;border-radius:8px;
+                      border:1px solid #444;background:#1f6feb;color:#fff;text-decoration:none;">
+               使用 Google 登入
+            </a>
+            ''',
+            unsafe_allow_html=True
+        )
+        # === 新版登入 UI 結束 ===
 
         if require_login:
             st.stop()
