@@ -26,6 +26,9 @@ def get_supabase():
 
 sb = get_supabase()
 
+# 🔸新增：確保健康檢查用 anon key，避免吃到過期的使用者 JWT
+sb.postgrest.auth(None)
+
 # 啟動時做輕量健康檢查
 try:
     sb.table("translation_logs").select("id").limit(1).execute()
@@ -149,6 +152,12 @@ def auth_gate(require_login: bool = True):
 
     # B) 未登入 → 顯示登入 UI
     if "user" not in st.session_state:
+        # 🔸新增：未登入時一律切回 anon key（避免沿用過期 JWT）
+        try:
+            sb.postgrest.auth(None)
+        except Exception:
+            pass
+
         st.markdown("### 🔐 請先登入")
 
         # 產生 PKCE（每次顯示登入頁都重生一組）
