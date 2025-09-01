@@ -261,7 +261,7 @@ def auth_gate(require_login: bool = True):
             sb.auth.sign_out()
             sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
-                pass
+            pass
         st.session_state.pop("user", None)
         st.rerun()
 
@@ -307,6 +307,19 @@ def get_user_id():
 def get_user_email():
     u = st.session_state.get("user") or {}
     return u.get("email") or ""
+
+# 🔸新增：確保寫入/更新前一定用使用者 token（而不是 anon）
+def _ensure_user_token():
+    """確保目前 PostgREST 帶的是登入者的 access_token，而不是 anon。"""
+    u = st.session_state.get("user")
+    if not u:
+        return
+    tok = u.get("access_token")
+    if tok:
+        try:
+            sb.postgrest.auth(tok)
+        except Exception:
+            pass
 
 # ======================================================
 # 🟢 ステップ1：登場人物登録（穩定版：用版本號重置 key）
@@ -504,6 +517,9 @@ elif menu == "輸入提示並翻譯":
             """
             if st.session_state.get("log_id") or not combined_text:
                 return st.session_state.get("log_id")
+
+            _ensure_user_token()  # ✅ 新增：確保用使用者 token
+
             res = (
                 sb_client.table("translation_logs")
                 .insert({
@@ -523,6 +539,9 @@ elif menu == "輸入提示並翻譯":
             combined = _get_combined()
             if not (log_id and combined):
                 return False
+
+            _ensure_user_token()  # ✅ 新增
+
             sb_client.table("translation_logs").update(
                 {"combined_prompt": combined}
             ).eq("id", log_id).execute()
@@ -533,6 +552,9 @@ elif menu == "輸入提示並翻譯":
             output = (st.session_state.get("translation") or "").strip()
             if not (log_id and output):
                 return False
+
+            _ensure_user_token()  # ✅ 新增
+
             sb_client.table("translation_logs").update(
                 {"output_text": output}
             ).eq("id", log_id).execute()
