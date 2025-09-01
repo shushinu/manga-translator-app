@@ -27,7 +27,7 @@ def get_supabase():
 sb = get_supabase()
 
 # 🔸新增：確保健康檢查用 anon key，避免吃到過期的使用者 JWT
-sb.postgrest.auth(None)
+sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
 
 # 啟動時做輕量健康檢查
 try:
@@ -154,7 +154,7 @@ def auth_gate(require_login: bool = True):
     if "user" not in st.session_state:
         # 🔸新增：未登入時一律切回 anon key（避免沿用過期 JWT）
         try:
-            sb.postgrest.auth(None)
+            sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
             pass
 
@@ -259,9 +259,9 @@ def auth_gate(require_login: bool = True):
     if st.button("🔓 登出"):
         try:
             sb.auth.sign_out()
-            sb.postgrest.auth(None)
+            sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
-            pass
+                pass
         st.session_state.pop("user", None)
         st.rerun()
 
