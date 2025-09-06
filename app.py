@@ -124,6 +124,18 @@ STRINGS = {
 4. 該用語在台灣讀者之間有無普遍認知？是否有既定譯名？
 答：
 """,
+        "tpl_policy": """1. 你希望翻譯的整體語氣是什麼？（例如：輕鬆幽默、溫柔體貼、嚴肅冷靜）
+答：
+
+2. 面對目標讀者（例如小學生），用詞上有哪些需要特別注意的地方？
+答：
+
+3. 是希望以直譯的方式盡可能地保留原文意義？還是以意譯的方式翻譯以確保譯文閱讀起來更自然？
+答：
+
+4. 是否有特別需要避免的語氣、詞彙或文化誤解？
+答：
+""",
         # 提示/規則（OCR 與翻譯）
         "ocr_system": """你是一位熟悉日本漫畫對話場景的台詞辨識助手，請從下方圖片中，**只提取漫畫「對話框（吹き出し）」中的日文台詞**。
 
@@ -260,6 +272,18 @@ STRINGS = {
 答：
 
 4. 该用语在台湾读者之间有无普遍认知？是否有既定译名？
+答：
+""",
+        "tpl_policy": """1. 你希望翻译的整体语气是什么？（例如：轻松幽默、温柔体贴、严肃冷静）
+答：
+
+2. 面对目标读者（例如小学生），用词上有哪些需要特别注意的地方？
+答：
+
+3. 是希望以直译的方式尽可能地保留原文意义？还是以意译的方式翻译以确保译文读起来更自然？
+答：
+
+4. 是否有特别需要避免的语气、词汇或文化误解？
 答：
 """,
         "ocr_system": """你是一位熟悉日本漫画对话场景的台词识别助手，请从下方图片中，**只提取漫画“对话框（吹き出し）”中的日文台词**。
@@ -446,20 +470,6 @@ if st.session_state["lang"] == "zh-Hans":
           font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
           font-weight: 400 !important;
         }
-        /* Anti-overlay：阻止任何外掛/樣式在輸入元件上疊字 */
-        .stApp input::before,
-        .stApp input::after,
-        .stApp textarea::before,
-        .stApp textarea::after,
-        .stApp .stTextInput input::before,
-        .stApp .stTextInput input::after,
-        .stApp .stTextArea textarea::before,
-        .stApp .stTextArea textarea::after,
-        .stApp div[role="textbox"]::before,
-        .stApp div[role="textbox"]::after {
-          content: none !important;
-          display: none !important;
-        }
         div.block-container{padding-top: 1.2rem;}
     </style>
     """, unsafe_allow_html=True)
@@ -489,20 +499,6 @@ else:
         .stApp .emoji, .stApp [aria-label="emoji"] {
           font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
           font-weight: 400 !important;
-        }
-        /* Anti-overlay：阻止任何外掛/樣式在輸入元件上疊字 */
-        .stApp input::before,
-        .stApp input::after,
-        .stApp textarea::before,
-        .stApp textarea::after,
-        .stApp .stTextInput input::before,
-        .stApp .stTextInput input::after,
-        .stApp .stTextArea textarea::before,
-        .stApp .stTextArea textarea::after,
-        .stApp div[role="textbox"]::before,
-        .stApp div[role="textbox"]::after {
-          content: none !important;
-          display: none !important;
         }
         div.block-container{padding-top: 1.2rem;}
     </style>
@@ -1056,7 +1052,7 @@ elif menu == "translate":
                 STRINGS[st.session_state["lang"]]["sec_policy"].format(content=st.session_state["translation_policy"])
             )
             if per_char_sections:
-                combined_prompt += STRINGS[st.session_state]["sec_charblocks_title"] + per_char_sections + "\n\n"
+                combined_prompt += STRINGS[st.session_state["lang"]]["sec_charblocks_title"] + per_char_sections + "\n\n"
             combined_prompt += STRINGS[st.session_state["lang"]]["sec_source"].format(source=st.session_state["corrected_text"])
 
             st.session_state["combined_prompt"] = combined_prompt
