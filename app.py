@@ -504,36 +504,6 @@ else:
     </style>
     """, unsafe_allow_html=True)
 
-# --- Icon fonts (Material Symbols / Icons) — 必須在全域字型覆蓋之後 ---
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-
-<style>
-/* 讓圖示元素不要被 .stApp, .stApp * 的字型覆蓋 */
-.stApp .material-icons,
-.stApp .material-icons-round,
-.stApp .material-icons-outlined,
-.stApp .material-symbols-outlined,
-.stApp .material-symbols-rounded,
-.stApp .material-symbols-sharp {
-  font-family: 'Material Symbols Outlined','Material Symbols Rounded',
-               'Material Icons Round','Material Icons','Material Symbols Sharp' !important;
-  font-style: normal !important;
-  font-weight: normal !important;
-  letter-spacing: normal !important;
-  text-transform: none !important;
-  display: inline-block;
-  line-height: 1;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* 交給變體參數控制樣式 */
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-}
-</style>
-""", unsafe_allow_html=True)
-
 
 # 放在頁面最上方，靠右但不與原生頂欄重疊
 _lang_cols = st.columns([0.78, 0.22])
