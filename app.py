@@ -469,6 +469,18 @@ if st.session_state["lang"] == "zh-Hans":
         .stApp .emoji, .stApp [aria-label="emoji"] {
           font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
           font-weight: 400 !important;
+        }.stApp input::before,
+        .stApp input::after,
+        .stApp textarea::before,
+        .stApp textarea::after,
+        .stApp .stTextInput input::before,
+        .stApp .stTextInput input::after,
+        .stApp .stTextArea textarea::before,
+        .stApp .stTextArea textarea::after,
+        .stApp div[role="textbox"]::before,
+        .stApp div[role="textbox"]::after {
+        content: none !important;
+        display: none !important;
         }
         div.block-container{padding-top: 1.2rem;}
     </style>
