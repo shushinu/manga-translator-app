@@ -441,133 +441,69 @@ _get_lang_from_qs_or_session()
 
 if st.session_state["lang"] == "zh-Hans":
     st.markdown("""
-    <!-- 主要中文字型 -->
+    <!-- 主：SC；後備：TC/JP，用於缺字時回退，避免樣式不一致 -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
-    <!-- 內建圖示用字型（很重要） -->
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-
     <style>
-      :root {
-        --cn-body: 500;
-        --cn-heading: 700;
-        --cn-font: 'Noto Sans SC','Noto Sans TC','Noto Sans JP',
-                   'Source Han Sans SC','PingFang SC',
-                   'Microsoft YaHei UI','Microsoft YaHei',sans-serif;
-      }
-
-      /* 統一中文字型——但跳過 icon 相關元素，避免把圖示變成文字 */
-      .stApp, .stApp :where(*):not([data-testid="stIcon"]):not(.material-icons):not(.material-icons-round):not(.material-icons-outlined):not(.material-symbols-outlined):not(.material-symbols-rounded) {
-        font-family: var(--cn-font) !important;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        text-rendering: optimizeLegibility;
-        font-weight: var(--cn-body);
-      }
-
-      /* 標題粗細 */
-      h1, h2, h3, h4, h5, h6,
-      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-        font-weight: var(--cn-heading) !important;
-      }
-
-      /* 正確指定 icon 容器要用的字型 */
-      [data-testid="stIcon"],
-      .material-icons, .material-icons-round, .material-icons-outlined,
-      .material-symbols-outlined, .material-symbols-rounded {
-        font-family: 'Material Icons Round','Material Symbols Outlined','Material Symbols Rounded' !important;
-        font-style: normal !important;
-        font-weight: normal !important;
-        letter-spacing: normal !important;
-        text-transform: none !important;
-        display: inline-block;
-        line-height: 1;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-      }
-
-      /* 彩色 Emoji */
-      .stApp .emoji, .stApp [aria-label="emoji"] {
-        font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
-        font-weight: 400 !important;
-      }
-
-      /* 修正表單標籤/選單被切頂 */
-      .stApp label,
-      .stApp .stMarkdown p,
-      .stApp [data-baseweb="select"] * {
-        line-height: 1.35 !important;
-      }
-      .stApp .stSelectbox > label { display:block; padding-top:2px; }
-
-      /* 與原本一致的上邊距 */
-      div.block-container { padding-top: 1.2rem; }
+        :root {
+          --cn-body: 500;   /* 正文 */
+          --cn-heading: 700;/* 標題 */
+          --cn-font: 'Noto Sans SC','Noto Sans TC','Noto Sans JP',
+                      'Source Han Sans SC','PingFang SC',
+                      'Microsoft YaHei UI','Microsoft YaHei',sans-serif;
+        }
+        /* 一次性套到整個 App（含所有子元件） */
+        .stApp, .stApp * {
+          font-family: var(--cn-font) !important;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          text-rendering: optimizeLegibility;
+          font-weight: var(--cn-body);
+        }
+        h1, h2, h3, h4, h5, h6,
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+          font-weight: var(--cn-heading) !important;
+        }
+        /* 讓 Emoji 用彩色字型 */
+        .stApp .emoji, .stApp [aria-label="emoji"] {
+          font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
+          font-weight: 400 !important;
+        }
+        div.block-container{padding-top: 1.2rem;}
     </style>
     """, unsafe_allow_html=True)
-
 else:
     st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- （可選）也補一條 JP 作為少數日文假名的保底 -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-
     <style>
-      :root {
-        --tc-body: 500;
-        --tc-heading: 700;
-        --tc-font: 'Noto Sans TC','Noto Sans JP',
-                   'Microsoft JhengHei','PingFang TC',sans-serif;
-      }
-
-      .stApp, .stApp :where(*):not([data-testid="stIcon"]):not(.material-icons):not(.material-icons-round):not(.material-icons-outlined):not(.material-symbols-outlined):not(.material-symbols-rounded) {
-        font-family: var(--tc-font) !important;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        text-rendering: optimizeLegibility;
-        font-weight: var(--tc-body);
-      }
-
-      h1, h2, h3, h4, h5, h6,
-      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-        font-weight: var(--tc-heading) !important;
-      }
-
-      [data-testid="stIcon"],
-      .material-icons, .material-icons-round, .material-icons-outlined,
-      .material-symbols-outlined, .material-symbols-rounded {
-        font-family: 'Material Icons Round','Material Symbols Outlined','Material Symbols Rounded' !important;
-        font-style: normal !important;
-        font-weight: normal !important;
-        letter-spacing: normal !important;
-        text-transform: none !important;
-        display: inline-block;
-        line-height: 1;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-      }
-
-      .stApp .emoji, .stApp [aria-label="emoji"] {
-        font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
-        font-weight: 400 !important;
-      }
-
-      .stApp label,
-      .stApp .stMarkdown p,
-      .stApp [data-baseweb="select"] * {
-        line-height: 1.35 !important;
-      }
-      .stApp .stSelectbox > label { display:block; padding-top:2px; }
-
-      div.block-container { padding-top: 1.2rem; }
+        :root {
+          --tc-body: 500;
+          --tc-heading: 700;
+          --tc-font: 'Noto Sans TC','Noto Sans JP',
+                     'Microsoft JhengHei','PingFang TC',sans-serif;
+        }
+        .stApp, .stApp * {
+          font-family: var(--tc-font) !important;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          text-rendering: optimizeLegibility;
+          font-weight: var(--tc-body);
+        }
+        h1, h2, h3, h4, h5, h6,
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+          font-weight: var(--tc-heading) !important;
+        }
+        .stApp .emoji, .stApp [aria-label="emoji"] {
+          font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
+          font-weight: 400 !important;
+        }
+        div.block-container{padding-top: 1.2rem;}
     </style>
     """, unsafe_allow_html=True)
+
 
 # 放在頁面最上方，靠右但不與原生頂欄重疊
 _lang_cols = st.columns([0.78, 0.22])
@@ -1043,57 +979,57 @@ elif menu == "translate":
                 {"output_text": output}
             ).eq("id", log_id).execute()
             return True
-        # ---------- 工具函式結束 ----------
+        # # ---------- 工具函式結束 ----------
 
-        examples = {
-            "background_style": (
-                "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
-            ),
-            "terminology": (
-                "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
-            ),
-            "translation_policy": (
-                "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
-            )
-        }
+        # examples = {
+        #     "background_style": (
+        #         "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
+        #     ),
+        #     "terminology": (
+        #         "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
+        #     ),
+        #     "translation_policy": (
+        #         "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
+        #     )
+        # }
 
-        st.markdown(f"### {t('bg_title')}")
-        st.caption(t("bg_caption"))
-        with st.expander(t("example")):
-            st.code(examples["background_style"], language="markdown")
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                     key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
+        # st.markdown(f"### {t('bg_title')}")
+        # st.caption(t("bg_caption"))
+        # with st.expander(t("example")):
+        #     st.code(examples["background_style"], language="markdown")
+        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+        #              key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
 
-        if "characters" in st.session_state and st.session_state["characters"]:
-            st.markdown(f"### {t('char_traits_title')}")
-            st.caption(t("char_traits_caption"))
-            for idx, c in enumerate(st.session_state["characters"]):
-                char_key = f"character_traits_{idx}"
-                if char_key not in st.session_state:
-                    st.session_state[char_key] = STRINGS[st.session_state["lang"]]["tpl_character"]
-                with st.expander(f"🧑‍🎨 {c.get('name','角色' if st.session_state['lang']=='zh-Hant' else '角色')} 的角色補充（點此展開）" if st.session_state["lang"]=="zh-Hant"
-                                  else f"🧑‍🎨 {c.get('name','角色')} 的角色补充（点此展开）", expanded=False):
-                    st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：", key=char_key, height=200)
+        # if "characters" in st.session_state and st.session_state["characters"]:
+        #     st.markdown(f"### {t('char_traits_title')}")
+        #     st.caption(t("char_traits_caption"))
+        #     for idx, c in enumerate(st.session_state["characters"]):
+        #         char_key = f"character_traits_{idx}"
+        #         if char_key not in st.session_state:
+        #             st.session_state[char_key] = STRINGS[st.session_state["lang"]]["tpl_character"]
+        #         with st.expander(f"🧑‍🎨 {c.get('name','角色' if st.session_state['lang']=='zh-Hant' else '角色')} 的角色補充（點此展開）" if st.session_state["lang"]=="zh-Hant"
+        #                           else f"🧑‍🎨 {c.get('name','角色')} 的角色补充（点此展开）", expanded=False):
+        #             st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：", key=char_key, height=200)
 
-        st.markdown(f"### {t('term_title')}")
-        st.caption(t("term_caption"))
-        with st.expander(t("example")):
-            st.code(examples["terminology"], language="markdown")
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                     key="terminology", height=200, value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
+        # st.markdown(f"### {t('term_title')}")
+        # st.caption(t("term_caption"))
+        # with st.expander(t("example")):
+        #     st.code(examples["terminology"], language="markdown")
+        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+        #              key="terminology", height=200, value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
 
-        st.markdown(f"### {t('policy_title')}")
-        st.caption(t("policy_caption"))
-        with st.expander(t("example")):
-            st.code(examples["translation_policy"], language="markdown")
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                     key="translation_policy", height=200, value=STRINGS[st.session_state["lang"]]["tpl_policy"])
+        # st.markdown(f"### {t('policy_title')}")
+        # st.caption(t("policy_caption"))
+        # with st.expander(t("example")):
+        #     st.code(examples["translation_policy"], language="markdown")
+        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+        #              key="translation_policy", height=200, value=STRINGS[st.session_state["lang"]]["tpl_policy"])
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
         if st.button(t("btn_save_and_build")):
