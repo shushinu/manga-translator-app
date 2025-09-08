@@ -981,28 +981,28 @@ elif menu == "translate":
             return True
         # ---------- 工具函式結束 ----------
 
-        examples = {
-            "background_style": (
-                "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
-            ),
-            "terminology": (
-                "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
-            ),
-            "translation_policy": (
-                "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
-                if st.session_state["lang"]=="zh-Hant"
-                else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
-            )
-        }
+        # examples = {
+        #     "background_style": (
+        #         "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
+        #     ),
+        #     "terminology": (
+        #         "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
+        #     ),
+        #     "translation_policy": (
+        #         "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
+        #         if st.session_state["lang"]=="zh-Hant"
+        #         else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
+        #     )
+        # }
 
         st.markdown(f"### {t('bg_title')}")
         st.caption(t("bg_caption"))
-        with st.expander(t("example")):
-            st.code(examples["background_style"], language="markdown")
+        # with st.expander(t("example")):
+        #     st.code(examples["background_style"], language="markdown")
         st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
                      key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
 
@@ -1019,15 +1019,15 @@ elif menu == "translate":
 
         st.markdown(f"### {t('term_title')}")
         st.caption(t("term_caption"))
-        with st.expander(t("example")):
-            st.code(examples["terminology"], language="markdown")
+        # with st.expander(t("example")):
+        #     st.code(examples["terminology"], language="markdown")
         st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
                      key="terminology", height=200, value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
 
         st.markdown(f"### {t('policy_title')}")
         st.caption(t("policy_caption"))
-        with st.expander(t("example")):
-            st.code(examples["translation_policy"], language="markdown")
+        # with st.expander(t("example")):
+        #     st.code(examples["translation_policy"], language="markdown")
         st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
                      key="translation_policy", height=200, value=STRINGS[st.session_state["lang"]]["tpl_policy"])
 
