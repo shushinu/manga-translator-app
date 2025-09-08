@@ -979,57 +979,57 @@ elif menu == "translate":
                 {"output_text": output}
             ).eq("id", log_id).execute()
             return True
-        # # ---------- 工具函式結束 ----------
+        # ---------- 工具函式結束 ----------
 
-        # examples = {
-        #     "background_style": (
-        #         "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
-        #     ),
-        #     "terminology": (
-        #         "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
-        #     ),
-        #     "translation_policy": (
-        #         "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
-        #     )
-        # }
+        examples = {
+            "background_style": (
+                "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
+                if st.session_state["lang"]=="zh-Hant"
+                else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
+            ),
+            "terminology": (
+                "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
+                if st.session_state["lang"]=="zh-Hant"
+                else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
+            ),
+            "translation_policy": (
+                "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
+                if st.session_state["lang"]=="zh-Hant"
+                else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
+            )
+        }
 
-        # st.markdown(f"### {t('bg_title')}")
-        # st.caption(t("bg_caption"))
-        # with st.expander(t("example")):
-        #     st.code(examples["background_style"], language="markdown")
-        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-        #              key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
+        st.markdown(f"### {t('bg_title')}")
+        st.caption(t("bg_caption"))
+        with st.expander(t("example")):
+            st.code(examples["background_style"], language="markdown")
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                     key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
 
-        # if "characters" in st.session_state and st.session_state["characters"]:
-        #     st.markdown(f"### {t('char_traits_title')}")
-        #     st.caption(t("char_traits_caption"))
-        #     for idx, c in enumerate(st.session_state["characters"]):
-        #         char_key = f"character_traits_{idx}"
-        #         if char_key not in st.session_state:
-        #             st.session_state[char_key] = STRINGS[st.session_state["lang"]]["tpl_character"]
-        #         with st.expander(f"🧑‍🎨 {c.get('name','角色' if st.session_state['lang']=='zh-Hant' else '角色')} 的角色補充（點此展開）" if st.session_state["lang"]=="zh-Hant"
-        #                           else f"🧑‍🎨 {c.get('name','角色')} 的角色补充（点此展开）", expanded=False):
-        #             st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：", key=char_key, height=200)
+        if "characters" in st.session_state and st.session_state["characters"]:
+            st.markdown(f"### {t('char_traits_title')}")
+            st.caption(t("char_traits_caption"))
+            for idx, c in enumerate(st.session_state["characters"]):
+                char_key = f"character_traits_{idx}"
+                if char_key not in st.session_state:
+                    st.session_state[char_key] = STRINGS[st.session_state["lang"]]["tpl_character"]
+                with st.expander(f"🧑‍🎨 {c.get('name','角色' if st.session_state['lang']=='zh-Hant' else '角色')} 的角色補充（點此展開）" if st.session_state["lang"]=="zh-Hant"
+                                  else f"🧑‍🎨 {c.get('name','角色')} 的角色补充（点此展开）", expanded=False):
+                    st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：", key=char_key, height=200)
 
-        # st.markdown(f"### {t('term_title')}")
-        # st.caption(t("term_caption"))
-        # with st.expander(t("example")):
-        #     st.code(examples["terminology"], language="markdown")
-        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-        #              key="terminology", height=200, value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
+        st.markdown(f"### {t('term_title')}")
+        st.caption(t("term_caption"))
+        with st.expander(t("example")):
+            st.code(examples["terminology"], language="markdown")
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                     key="terminology", height=200, value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
 
-        # st.markdown(f"### {t('policy_title')}")
-        # st.caption(t("policy_caption"))
-        # with st.expander(t("example")):
-        #     st.code(examples["translation_policy"], language="markdown")
-        # st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-        #              key="translation_policy", height=200, value=STRINGS[st.session_state["lang"]]["tpl_policy"])
+        st.markdown(f"### {t('policy_title')}")
+        st.caption(t("policy_caption"))
+        with st.expander(t("example")):
+            st.code(examples["translation_policy"], language="markdown")
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                     key="translation_policy", height=200, value=STRINGS[st.session_state["lang"]]["tpl_policy"])
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
         if st.button(t("btn_save_and_build")):
