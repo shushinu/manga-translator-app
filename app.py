@@ -441,69 +441,133 @@ _get_lang_from_qs_or_session()
 
 if st.session_state["lang"] == "zh-Hans":
     st.markdown("""
-    <!-- 主：SC；後備：TC/JP，用於缺字時回退，避免樣式不一致 -->
+    <!-- 主要中文字型 -->
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+    <!-- 內建圖示用字型（很重要） -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
     <style>
-        :root {
-          --cn-body: 500;   /* 正文 */
-          --cn-heading: 700;/* 標題 */
-          --cn-font: 'Noto Sans SC','Noto Sans TC','Noto Sans JP',
-                      'Source Han Sans SC','PingFang SC',
-                      'Microsoft YaHei UI','Microsoft YaHei',sans-serif;
-        }
-        /* 一次性套到整個 App（含所有子元件） */
-        .stApp, .stApp * {
-          font-family: var(--cn-font) !important;
-          -webkit-font-smoothing: antialiased;
-          -moz-osx-font-smoothing: grayscale;
-          text-rendering: optimizeLegibility;
-          font-weight: var(--cn-body);
-        }
-        h1, h2, h3, h4, h5, h6,
-        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-          font-weight: var(--cn-heading) !important;
-        }
-        /* 讓 Emoji 用彩色字型 */
-        .stApp .emoji, .stApp [aria-label="emoji"] {
-          font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
-          font-weight: 400 !important;
-        }
-        div.block-container{padding-top: 1.2rem;}
-    </style>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- （可選）也補一條 JP 作為少數日文假名的保底 -->
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-          --tc-body: 500;
-          --tc-heading: 700;
-          --tc-font: 'Noto Sans TC','Noto Sans JP',
-                     'Microsoft JhengHei','PingFang TC',sans-serif;
-        }
-        .stApp, .stApp * {
-          font-family: var(--tc-font) !important;
-          -webkit-font-smoothing: antialiased;
-          -moz-osx-font-smoothing: grayscale;
-          text-rendering: optimizeLegibility;
-          font-weight: var(--tc-body);
-        }
-        h1, h2, h3, h4, h5, h6,
-        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-          font-weight: var(--tc-heading) !important;
-        }
-        .stApp .emoji, .stApp [aria-label="emoji"] {
-          font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
-          font-weight: 400 !important;
-        }
-        div.block-container{padding-top: 1.2rem;}
+      :root {
+        --cn-body: 500;
+        --cn-heading: 700;
+        --cn-font: 'Noto Sans SC','Noto Sans TC','Noto Sans JP',
+                   'Source Han Sans SC','PingFang SC',
+                   'Microsoft YaHei UI','Microsoft YaHei',sans-serif;
+      }
+
+      /* 統一中文字型——但跳過 icon 相關元素，避免把圖示變成文字 */
+      .stApp, .stApp :where(*):not([data-testid="stIcon"]):not(.material-icons):not(.material-icons-round):not(.material-icons-outlined):not(.material-symbols-outlined):not(.material-symbols-rounded) {
+        font-family: var(--cn-font) !important;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        font-weight: var(--cn-body);
+      }
+
+      /* 標題粗細 */
+      h1, h2, h3, h4, h5, h6,
+      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        font-weight: var(--cn-heading) !important;
+      }
+
+      /* 正確指定 icon 容器要用的字型 */
+      [data-testid="stIcon"],
+      .material-icons, .material-icons-round, .material-icons-outlined,
+      .material-symbols-outlined, .material-symbols-rounded {
+        font-family: 'Material Icons Round','Material Symbols Outlined','Material Symbols Rounded' !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        display: inline-block;
+        line-height: 1;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+
+      /* 彩色 Emoji */
+      .stApp .emoji, .stApp [aria-label="emoji"] {
+        font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
+        font-weight: 400 !important;
+      }
+
+      /* 修正表單標籤/選單被切頂 */
+      .stApp label,
+      .stApp .stMarkdown p,
+      .stApp [data-baseweb="select"] * {
+        line-height: 1.35 !important;
+      }
+      .stApp .stSelectbox > label { display:block; padding-top:2px; }
+
+      /* 與原本一致的上邊距 */
+      div.block-container { padding-top: 1.2rem; }
     </style>
     """, unsafe_allow_html=True)
 
+else:
+    st.markdown("""
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL,wght,GRAD,opsz@0,400,0,24&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+    <style>
+      :root {
+        --tc-body: 500;
+        --tc-heading: 700;
+        --tc-font: 'Noto Sans TC','Noto Sans JP',
+                   'Microsoft JhengHei','PingFang TC',sans-serif;
+      }
+
+      .stApp, .stApp :where(*):not([data-testid="stIcon"]):not(.material-icons):not(.material-icons-round):not(.material-icons-outlined):not(.material-symbols-outlined):not(.material-symbols-rounded) {
+        font-family: var(--tc-font) !important;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        font-weight: var(--tc-body);
+      }
+
+      h1, h2, h3, h4, h5, h6,
+      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        font-weight: var(--tc-heading) !important;
+      }
+
+      [data-testid="stIcon"],
+      .material-icons, .material-icons-round, .material-icons-outlined,
+      .material-symbols-outlined, .material-symbols-rounded {
+        font-family: 'Material Icons Round','Material Symbols Outlined','Material Symbols Rounded' !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        display: inline-block;
+        line-height: 1;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+
+      .stApp .emoji, .stApp [aria-label="emoji"] {
+        font-family: 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif !important;
+        font-weight: 400 !important;
+      }
+
+      .stApp label,
+      .stApp .stMarkdown p,
+      .stApp [data-baseweb="select"] * {
+        line-height: 1.35 !important;
+      }
+      .stApp .stSelectbox > label { display:block; padding-top:2px; }
+
+      div.block-container { padding-top: 1.2rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # 放在頁面最上方，靠右但不與原生頂欄重疊
 _lang_cols = st.columns([0.78, 0.22])
