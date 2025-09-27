@@ -22,37 +22,19 @@ if not cookies.ready():
     st.stop()
 
 # 讓每個分頁都有自己的 tab_id（關分頁就消失）
-_TAB_INIT_JS = """
-<script>
-(function(){
-  try {
-    const KEY = 'mt_tab';
-    let tab = sessionStorage.getItem(KEY);
-    if (!tab) {
-      if (crypto && crypto.randomUUID) {
-        tab = crypto.randomUUID();
-      } else {
-        tab = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      }
-      sessionStorage.setItem(KEY, tab);
-    }
-    const url = new URL(window.location.href);
-    if (url.searchParams.get('tab') !== tab) {
-      url.searchParams.set('tab', tab);
-      // 以 replace 方式更新網址，避免回上一頁循環
-      window.location.replace(url.toString());
-    }
-  } catch(e) {}
-})();
-</script>
-"""
-
 def ensure_tab_param():
-    # 第一次沒有 ?tab=... 時，先只渲染 JS，等它把參數補上再重跑
-    if "tab" not in st.query_params:
-        components.html(_TAB_INIT_JS, height=0)
-        st.stop()
-    return st.query_params.get("tab")
+    # 若已存在就直接用
+    if "tab" in st.query_params:
+        return st.query_params.get("tab")
+
+    # 第一次沒帶 tab：產生一個短隨機 ID，寫回 URL，然後 rerun
+    import os, base64
+    new_tab = base64.urlsafe_b64encode(os.urandom(8)).rstrip(b"=").decode()
+    st.query_params["tab"] = new_tab
+    # 保留目前語言參數（若有）
+    if "lang" in st.session_state:
+        st.query_params["lang"] = st.session_state["lang"]
+    st.rerun()
 
 TAB_ID = ensure_tab_param()
 
@@ -168,18 +150,6 @@ STRINGS = {
 答：
 
 4. 該用語在台灣讀者之間有無普遍認知？是否有既定譯名？
-答：
-""",
-        "tpl_policy": """1. 你希望翻譯的整體語氣是什麼？（例如：輕鬆幽默、溫柔體貼、嚴肅冷靜）
-答：
-
-2. 面對目標讀者（例如小學生），用詞上有哪些需要特別注意的地方？
-答：
-
-3. 是希望以直譯的方式盡可能地保留原文意義？還是以意譯的方式翻譯以確保譯文閱讀起來更自然？
-答：
-
-4. 是否有特別需要避免的語氣、詞彙或文化誤解？
 答：
 """,
         # 提示/規則（OCR 與翻譯）
@@ -318,18 +288,6 @@ STRINGS = {
 答：
 
 4. 该用语在台湾读者之间有无普遍认知？是否有既定译名？
-答：
-""",
-        "tpl_policy": """1. 你希望翻译的整体语气是什么？（例如：轻松幽默、温柔体贴、严肃冷静）
-答：
-
-2. 面对目标读者（例如小学生），用词上有哪些需要特别注意的地方？
-答：
-
-3. 是希望以直译的方式尽可能地保留原文意义？还是以意译的方式翻译以确保译文读起来更自然？
-答：
-
-4. 是否有特别需要避免的语气、词汇或文化误解？
 答：
 """,
         "ocr_system": """你是一位熟悉日本漫画对话场景的台词识别助手，请从下方图片中，**只提取漫画“对话框（吹き出し）”中的日文台词**。
@@ -519,6 +477,10 @@ def _try_restore_session_from_cookies() -> bool:
 
     # 分頁不相符 → 視為未登入（要求重登）
     if not tab_param or (tab_cookie != tab_param):
+        try:
+            sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
+        except Exception:
+            pass
         return False
 
     at = cookies.get("sb_at")
@@ -1319,7 +1281,7 @@ elif menu == "translate":
                         response = client.chat.completions.create(
                             model="gpt-4o",
                             messages = [
-                                { "role": "system", "content": STRINGS[st.session_state["lang"]]["translate_system"] },
+                                { "role": "system", "content": STRINGS[st.session_state()["lang"]]["translate_system"] },
                                 {"role": "user", "content": prompt_for_translation}
                             ],
                             temperature=temperature,
