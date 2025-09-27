@@ -1150,12 +1150,19 @@ elif menu == "translate":
         #     )
         # }
 
+                # ---------- 工具函式結束 ----------
+
         st.markdown(f"### {t('bg_title')}")
         st.caption(t("bg_caption"))
         # with st.expander(t("example")):
         #     st.code(examples["background_style"], language="markdown")
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                     key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
+        st.text_area(
+            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            key="background_style",
+            height=200,
+            # ✅ 安全取值：語言異常時回退繁中
+            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_background","")
+        )
 
         if "characters" in st.session_state and st.session_state["characters"]:
             st.markdown(f"### {t('char_traits_title')}")
@@ -1199,17 +1206,24 @@ elif menu == "translate":
         # 術語
         st.markdown(f"### {t('term_title')}")
         st.caption(t("term_caption"))
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                    key="terminology", height=200,
-                    value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
+        st.text_area(
+            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            key="terminology",
+            height=200,
+            # ✅ 安全取值
+            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_terminology","")
+        )
 
         # 翻譯方針
         st.markdown(f"### {t('policy_title')}")
         st.caption(t("policy_caption"))
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                    key="translation_policy", height=200,
-                    value=STRINGS[st.session_state["lang"]]["tpl_policy"])
-
+        st.text_area(
+            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            key="translation_policy",
+            height=200,
+            # ✅ 安全取值
+            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_policy","")
+        )
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
         if st.button(t("btn_save_and_build")):
@@ -1281,7 +1295,7 @@ elif menu == "translate":
                         response = client.chat.completions.create(
                             model="gpt-4o",
                             messages = [
-                                { "role": "system", "content": STRINGS[st.session_state()["lang"]]["translate_system"] },
+                                { "role": "system", "content": STRINGS[st.session_state["lang"]]["translate_system"] },
                                 {"role": "user", "content": prompt_for_translation}
                             ],
                             temperature=temperature,
