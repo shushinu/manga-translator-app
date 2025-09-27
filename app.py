@@ -12,11 +12,49 @@ import urllib.parse
 from supabase import create_client
 from streamlit_cookies_manager import EncryptedCookieManager
 import time
+import streamlit.components.v1 as components
+
+
 
 # 用 cookie 保存/還原登入狀態（首次載入會停一輪，下一輪就 ready）
 cookies = EncryptedCookieManager(prefix="mt-", password=st.secrets["cookies"]["password"])
 if not cookies.ready():
     st.stop()
+
+# 讓每個分頁都有自己的 tab_id（關分頁就消失）
+_TAB_INIT_JS = """
+<script>
+(function(){
+  try {
+    const KEY = 'mt_tab';
+    let tab = sessionStorage.getItem(KEY);
+    if (!tab) {
+      if (crypto && crypto.randomUUID) {
+        tab = crypto.randomUUID();
+      } else {
+        tab = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      }
+      sessionStorage.setItem(KEY, tab);
+    }
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('tab') !== tab) {
+      url.searchParams.set('tab', tab);
+      // 以 replace 方式更新網址，避免回上一頁循環
+      window.location.replace(url.toString());
+    }
+  } catch(e) {}
+})();
+</script>
+"""
+
+def ensure_tab_param():
+    # 第一次沒有 ?tab=... 時，先只渲染 JS，等它把參數補上再重跑
+    if "tab" not in st.query_params:
+        components.html(_TAB_INIT_JS, height=0)
+        st.stop()
+    return st.query_params.get("tab")
+
+TAB_ID = ensure_tab_param()
 
 
 # （可選）開啟除錯資訊
@@ -337,6 +375,7 @@ STRINGS = {
 
 def _get_lang_from_qs_or_session():
     qp = st.query_params
+    tab = qp.get("tab", "")
     # 認可的 lang
     if "lang" in qp and qp["lang"] in LANGS:
         st.session_state["lang"] = qp["lang"]
@@ -444,22 +483,44 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri:
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
 
+# ＝修改後＝（寫成「Session cookie」）
 def _save_session_to_cookies(session_dict: dict, provider: str):
-    """把 access_token / refresh_token 存到 cookie，供重整後還原。"""
+    """把 access_token / refresh_token 存成『session cookie』（關瀏覽器就失效），並綁定當前分頁 tab_id。"""
     at = session_dict.get("access_token")
     rt = session_dict.get("refresh_token")
-    exp_in = session_dict.get("expires_in")
+
     if at:
         cookies["sb_at"] = at
     if rt:
         cookies["sb_rt"] = rt
-    if exp_in:
-        cookies["sb_exp_at"] = str(int(time.time()) + int(exp_in) - 60)  # 提前 60 秒
     cookies["sb_provider"] = provider or ""
+
+    # 重要：把目前分頁的 tab_id 一起寫入 cookie（跨分頁時就會不相等）
+    if "tab" in st.query_params:
+        cookies["sb_tab"] = st.query_params["tab"]
+
     cookies.save()
+
+
+def _clear_auth_cookies():
+    for k in ("sb_at", "sb_rt", "sb_provider", "sb_exp_at", "sb_tab"):
+        try:
+            del cookies[k]
+        except Exception:
+            cookies[k] = ""
+    cookies.save()
+
 
 def _try_restore_session_from_cookies() -> bool:
     """啟動時嘗試從 cookie 還原；失效則用 refresh_token 換新。"""
+
+    tab_param = st.query_params.get("tab")
+    tab_cookie = cookies.get("sb_tab")
+
+    # 分頁不相符 → 視為未登入（要求重登）
+    if not tab_param or (tab_cookie != tab_param):
+        return False
+
     at = cookies.get("sb_at")
     rt = cookies.get("sb_rt")
     provider = cookies.get("sb_provider") or "cookie"
@@ -501,6 +562,7 @@ def _try_restore_session_from_cookies() -> bool:
             del cookies[k]
     cookies.save()
     return False
+
 
 
 # === i18n：右上角語言切換（登入前也顯示）
@@ -599,11 +661,19 @@ def auth_gate(require_login: bool = True):
         # === lang 保留：從 qs 讀 lang 值
         current_lang = qp.get("lang", st.session_state.get("lang", "zh-Hant"))
 
+        # === tab 保留：若 URL 沒有就為本分頁產生一次性 ID（只在本區塊用，其他地方不用改）
+        tab_val = qp.get("tab", TAB_ID)
+
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
         sep = "&" if ("?" in redirect_url) else "?"
-        redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(current_lang)}"
+        # ⬇⬇ 這裡改：把 tab 一起帶回來 ⬇⬇
+        redirect_with_pv = (
+            f"{redirect_url}{sep}"
+            f"pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(current_lang)}"
+            f"&tab={urllib.parse.quote(tab_val)}"
+        )
 
         if not verifier:
             st.error("OAuth 回來缺少 verifier（pv），請重試。")
@@ -618,7 +688,7 @@ def auth_gate(require_login: bool = True):
                     st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
                     _save_session_to_cookies(data, provider="google")
                     _set_sb_auth_with_token(access_token)
-                    # === lang 保留：清除 code/pv 等，但保留 lang
+                    # === lang/tab 保留：清除 code/pv 等，但保留 lang、tab
                     keys_to_remove = ["code", "pv", "error", "error_description"]
                     for k in list(st.query_params.keys()):
                         if k in keys_to_remove:
@@ -626,6 +696,7 @@ def auth_gate(require_login: bool = True):
                                 del st.query_params[k]
                             except Exception:
                                 pass
+                    # lang 既有函式，tab 已在 URL 上；這裡不用再動 tab
                     _set_query_lang(current_lang)
                     st.rerun()
             except Exception as e:
@@ -657,13 +728,20 @@ def auth_gate(require_login: bool = True):
             base_url += "/"
         join = "&" if ("?" in base_url) else "?"
         # === lang 保留：register 頁也跟著帶 lang
-        register_url = f"{base_url}{join}register=1&lang={urllib.parse.quote(st.session_state['lang'])}"
+        register_url = (
+            f"{base_url}{join}"
+            f"register=1&lang={urllib.parse.quote(st.session_state['lang'])}"
+            f"&tab={urllib.parse.quote(TAB_ID)}"
+        )
 
         pv_join = "&" if ("?" in base_url) else "?"
         # 將 verifier 與 lang 塞到 redirect_to（PKCE 必要 + 語言保留）
+        # 將 verifier、lang、tab 塞到 redirect_to（PKCE 必要 + 語言/分頁保留）
         redirect_with_pv = (
             f"{base_url}{pv_join}"
-            f"pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(st.session_state['lang'])}"
+            f"pv={urllib.parse.quote(verifier)}"
+            f"&lang={urllib.parse.quote(st.session_state['lang'])}"
+            f"&tab={urllib.parse.quote(TAB_ID)}"
         )
 
         google_login_url = (
@@ -710,9 +788,11 @@ def auth_gate(require_login: bool = True):
 
             # 回到登入（同分頁即可）
             st.markdown(
-                f'<a href="{base_url}?lang={urllib.parse.quote(st.session_state["lang"])}" style="display:inline-block;margin-top:10px;">{t("back_to_login")}</a>',
+                f'<a href="{base_url}?lang={urllib.parse.quote(st.session_state["lang"])}&tab={urllib.parse.quote(TAB_ID)}" '
+                f'style="display:inline-block;margin-top:10px;">{t("back_to_login")}</a>',
                 unsafe_allow_html=True
             )
+
             st.stop()  # 註冊頁不再往下渲染登入 UI
 
         # ---- 登入頁（預設）----
@@ -809,13 +889,7 @@ if "user" in st.session_state:
         except Exception:
             pass
 
-        # 2) 清除登入 cookie
-        for k in ("sb_at", "sb_rt", "sb_exp_at", "sb_provider"):
-            try:
-                del cookies[k]
-            except Exception:
-                cookies[k] = ""
-        cookies.save()
+        _clear_auth_cookies() 
 
         # 3) 清掉你 app 用到的 session_state
         for k in [
