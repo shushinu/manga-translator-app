@@ -10,6 +10,14 @@ import re
 import requests
 import urllib.parse
 from supabase import create_client
+from streamlit_cookies_manager import EncryptedCookieManager
+import time
+
+# 用 cookie 保存/還原登入狀態（首次載入會停一輪，下一輪就 ready）
+cookies = EncryptedCookieManager(prefix="mt-", password=st.secrets["cookies"]["password"])
+if not cookies.ready():
+    st.stop()
+
 
 # （可選）開啟除錯資訊
 SHOW_DEBUG = False
@@ -171,7 +179,7 @@ STRINGS = {
         "sec_background": "【作品背景與風格】\n{content}\n\n",
         "sec_terminology": "【專業術語／用語習慣】\n{content}\n\n",
         "sec_policy": "【翻譯方針】\n{content}\n\n",
-        "sec_charblocks_title": "【角色別補充】\n",
+        "sec_charblocks_title": "【角色補充】\n",
         "charblock": "【{name} 角色資訊】\n{content}\n",
         "sec_source": "【原始對白】\n{source}",
         # 其他訊息（可保留繁體，不是必要）
@@ -319,7 +327,7 @@ STRINGS = {
         "sec_background": "【作品背景与风格】\n{content}\n\n",
         "sec_terminology": "【专业术语／用语习惯】\n{content}\n\n",
         "sec_policy": "【翻译方针】\n{content}\n\n",
-        "sec_charblocks_title": "【角色别补充】\n",
+        "sec_charblocks_title": "【角色补充】\n",
         "charblock": "【{name} 角色资讯】\n{content}\n",
         "sec_source": "【原始对白】\n{source}",
         "supabase_ok": "✅ Supabase 连接测试成功",
@@ -436,6 +444,65 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri:
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
 
+def _save_session_to_cookies(session_dict: dict, provider: str):
+    """把 access_token / refresh_token 存到 cookie，供重整後還原。"""
+    at = session_dict.get("access_token")
+    rt = session_dict.get("refresh_token")
+    exp_in = session_dict.get("expires_in")
+    if at:
+        cookies["sb_at"] = at
+    if rt:
+        cookies["sb_rt"] = rt
+    if exp_in:
+        cookies["sb_exp_at"] = str(int(time.time()) + int(exp_in) - 60)  # 提前 60 秒
+    cookies["sb_provider"] = provider or ""
+    cookies.save()
+
+def _try_restore_session_from_cookies() -> bool:
+    """啟動時嘗試從 cookie 還原；失效則用 refresh_token 換新。"""
+    at = cookies.get("sb_at")
+    rt = cookies.get("sb_rt")
+    provider = cookies.get("sb_provider") or "cookie"
+
+    # 1) 先試既有 access_token
+    if at:
+        try:
+            user = _fetch_supabase_user(at)
+            st.session_state["user"] = _user_from_auth(user, at, provider=provider)
+            sb.postgrest.auth(at)
+            return True
+        except Exception:
+            pass
+
+    # 2) 失敗且有 refresh_token → 換新
+    if rt:
+        try:
+            url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=refresh_token"
+            headers = {
+                "apikey": st.secrets["supabase"]["anon_key"],
+                "Authorization": f"Bearer {st.secrets['supabase']['anon_key']}",
+                "Content-Type": "application/json",
+            }
+            r = requests.post(url, headers=headers, json={"refresh_token": rt}, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                _save_session_to_cookies(data, provider)
+                new_at = data.get("access_token")
+                user = _fetch_supabase_user(new_at)
+                st.session_state["user"] = _user_from_auth(user, new_at, provider=provider)
+                sb.postgrest.auth(new_at)
+                return True
+        except Exception:
+            pass
+
+    # 3) 全失敗 → 清除殘留
+    for k in ["sb_at", "sb_rt", "sb_exp_at", "sb_provider"]:
+        if k in cookies:
+            del cookies[k]
+    cookies.save()
+    return False
+
+
 # === i18n：右上角語言切換（登入前也顯示）
 _get_lang_from_qs_or_session()
 
@@ -549,6 +616,7 @@ def auth_gate(require_login: bool = True):
                     st.error(f"交換 access_token 失敗：{data}")
                 else:
                     st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
+                    _save_session_to_cookies(data, provider="google")
                     _set_sb_auth_with_token(access_token)
                     # === lang 保留：清除 code/pv 等，但保留 lang
                     keys_to_remove = ["code", "pv", "error", "error_description"]
@@ -667,8 +735,22 @@ def auth_gate(require_login: bool = True):
                         token = session.access_token
                         _set_sb_auth_with_token(token)
                         st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
+
+                        # ⭐ 優先用新版 supabase-py 的 model_dump()；失敗就自己組
+                        try:
+                            data = session.model_dump()
+                        except Exception:
+                            data = {
+                                "access_token": getattr(session, "access_token", None),
+                                "refresh_token": getattr(session, "refresh_token", None),
+                                "expires_in": getattr(session, "expires_in", 3600),
+                            }
+
+                        _save_session_to_cookies(data, provider="email")
+
                         st.success(f"登入成功：{st.session_state['user']['email']}")
                         st.rerun()
+
                 except Exception as e:
                     st.error(f"登入失敗：{e}")
 
@@ -702,24 +784,57 @@ def auth_gate(require_login: bool = True):
         else:
             return None
 
-    # C) 已登入 → 顯示狀態 + 登出
+
+
+# ✅ 啟用門神（未登入就無法操作）
+# 先嘗試用 cookie 還原（已登入就會把 st.session_state["user"] 補上）
+_try_restore_session_from_cookies()
+
+user = auth_gate(require_login=True)
+
+if "user" in st.session_state:
     st.info(t("current_login").format(
-        name=st.session_state["user"]["full_name"], email=st.session_state["user"]["email"]
+        name=st.session_state["user"]["full_name"],
+        email=st.session_state["user"]["email"]
     ))
+
     if st.button(t("logout")):
+        # 1) 讓 Supabase session 失效，並切回 anon key
         try:
             sb.auth.sign_out()
+        except Exception:
+            pass
+        try:
             sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
             pass
-        for k in ["user","characters","image_base64","ocr_text","corrected_text",
-                  "combined_prompt","prompt_template","prompt_input","translation",
-                  "log_id","ocr_version","corrected_text_version"]:
-            st.session_state.pop(k, None)
-        st.rerun()
 
-# ✅ 啟用門神（未登入就無法操作）
-user = auth_gate(require_login=True)
+        # 2) 清除登入 cookie
+        for k in ("sb_at", "sb_rt", "sb_exp_at", "sb_provider"):
+            try:
+                del cookies[k]
+            except Exception:
+                cookies[k] = ""
+        cookies.save()
+
+        # 3) 清掉你 app 用到的 session_state
+        for k in [
+            "user","characters","image_base64","ocr_text","corrected_text",
+            "combined_prompt","prompt_template","prompt_input","translation",
+            "log_id","ocr_version","corrected_text_version",
+            "_char_hint_css","char_uploader_ver","char_fields_ver"
+        ]:
+            st.session_state.pop(k, None)
+
+        # 4) 清 OAuth/註冊用的查詢參數（保留 lang）
+        for k in ["code","pv","error","error_description","register"]:
+            if k in st.query_params:
+                try:
+                    del st.query_params[k]
+                except Exception:
+                    pass
+
+        st.rerun()
 
 # ===========================================
 # 頁面標題
