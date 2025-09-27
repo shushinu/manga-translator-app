@@ -10,34 +10,6 @@ import re
 import requests
 import urllib.parse
 from supabase import create_client
-from streamlit_cookies_manager import EncryptedCookieManager
-import time
-import streamlit.components.v1 as components
-
-
-
-# 用 cookie 保存/還原登入狀態（首次載入會停一輪，下一輪就 ready）
-cookies = EncryptedCookieManager(prefix="mt-", password=st.secrets["cookies"]["password"])
-if not cookies.ready():
-    st.stop()
-
-# 讓每個分頁都有自己的 tab_id（關分頁就消失）
-def ensure_tab_param():
-    # 若已存在就直接用
-    if "tab" in st.query_params:
-        return st.query_params.get("tab")
-
-    # 第一次沒帶 tab：產生一個短隨機 ID，寫回 URL，然後 rerun
-    import os, base64
-    new_tab = base64.urlsafe_b64encode(os.urandom(8)).rstrip(b"=").decode()
-    st.query_params["tab"] = new_tab
-    # 保留目前語言參數（若有）
-    if "lang" in st.session_state:
-        st.query_params["lang"] = st.session_state["lang"]
-    st.rerun()
-
-TAB_ID = ensure_tab_param()
-
 
 # （可選）開啟除錯資訊
 SHOW_DEBUG = False
@@ -150,6 +122,18 @@ STRINGS = {
 答：
 
 4. 該用語在台灣讀者之間有無普遍認知？是否有既定譯名？
+答：
+""",
+        "tpl_policy": """1. 你希望翻譯的整體語氣是什麼？（例如：輕鬆幽默、溫柔體貼、嚴肅冷靜）
+答：
+
+2. 面對目標讀者（例如小學生），用詞上有哪些需要特別注意的地方？
+答：
+
+3. 是希望以直譯的方式盡可能地保留原文意義？還是以意譯的方式翻譯以確保譯文閱讀起來更自然？
+答：
+
+4. 是否有特別需要避免的語氣、詞彙或文化誤解？
 答：
 """,
         # 提示/規則（OCR 與翻譯）
@@ -290,6 +274,18 @@ STRINGS = {
 4. 该用语在台湾读者之间有无普遍认知？是否有既定译名？
 答：
 """,
+        "tpl_policy": """1. 你希望翻译的整体语气是什么？（例如：轻松幽默、温柔体贴、严肃冷静）
+答：
+
+2. 面对目标读者（例如小学生），用词上有哪些需要特别注意的地方？
+答：
+
+3. 是希望以直译的方式尽可能地保留原文意义？还是以意译的方式翻译以确保译文读起来更自然？
+答：
+
+4. 是否有特别需要避免的语气、词汇或文化误解？
+答：
+""",
         "ocr_system": """你是一位熟悉日本漫画对话场景的台词识别助手，请从下方图片中，**只提取漫画“对话框（吹き出し）”中的日文台词**。
 
 🧩 规则：
@@ -333,7 +329,6 @@ STRINGS = {
 
 def _get_lang_from_qs_or_session():
     qp = st.query_params
-    tab = qp.get("tab", "")
     # 認可的 lang
     if "lang" in qp and qp["lang"] in LANGS:
         st.session_state["lang"] = qp["lang"]
@@ -441,92 +436,6 @@ def _exchange_code_for_session(auth_code: str, code_verifier: str, redirect_uri:
         raise Exception(f"{r.status_code} {r.text}")
     return r.json()
 
-# ＝修改後＝（寫成「Session cookie」）
-def _save_session_to_cookies(session_dict: dict, provider: str):
-    """把 access_token / refresh_token 存成『session cookie』（關瀏覽器就失效），並綁定當前分頁 tab_id。"""
-    at = session_dict.get("access_token")
-    rt = session_dict.get("refresh_token")
-
-    if at:
-        cookies["sb_at"] = at
-    if rt:
-        cookies["sb_rt"] = rt
-    cookies["sb_provider"] = provider or ""
-
-    # 重要：把目前分頁的 tab_id 一起寫入 cookie（跨分頁時就會不相等）
-    if "tab" in st.query_params:
-        cookies["sb_tab"] = st.query_params["tab"]
-
-    cookies.save()
-
-
-def _clear_auth_cookies():
-    for k in ("sb_at", "sb_rt", "sb_provider", "sb_exp_at", "sb_tab"):
-        try:
-            del cookies[k]
-        except Exception:
-            cookies[k] = ""
-    cookies.save()
-
-
-def _try_restore_session_from_cookies() -> bool:
-    """啟動時嘗試從 cookie 還原；失效則用 refresh_token 換新。"""
-
-    tab_param = st.query_params.get("tab")
-    tab_cookie = cookies.get("sb_tab")
-
-    # 分頁不相符 → 視為未登入（要求重登）
-    if not tab_param or (tab_cookie != tab_param):
-        try:
-            sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
-        except Exception:
-            pass
-        return False
-
-    at = cookies.get("sb_at")
-    rt = cookies.get("sb_rt")
-    provider = cookies.get("sb_provider") or "cookie"
-
-    # 1) 先試既有 access_token
-    if at:
-        try:
-            user = _fetch_supabase_user(at)
-            st.session_state["user"] = _user_from_auth(user, at, provider=provider)
-            sb.postgrest.auth(at)
-            return True
-        except Exception:
-            pass
-
-    # 2) 失敗且有 refresh_token → 換新
-    if rt:
-        try:
-            url = f"{st.secrets['supabase']['url']}/auth/v1/token?grant_type=refresh_token"
-            headers = {
-                "apikey": st.secrets["supabase"]["anon_key"],
-                "Authorization": f"Bearer {st.secrets['supabase']['anon_key']}",
-                "Content-Type": "application/json",
-            }
-            r = requests.post(url, headers=headers, json={"refresh_token": rt}, timeout=15)
-            if r.status_code == 200:
-                data = r.json()
-                _save_session_to_cookies(data, provider)
-                new_at = data.get("access_token")
-                user = _fetch_supabase_user(new_at)
-                st.session_state["user"] = _user_from_auth(user, new_at, provider=provider)
-                sb.postgrest.auth(new_at)
-                return True
-        except Exception:
-            pass
-
-    # 3) 全失敗 → 清除殘留
-    for k in ["sb_at", "sb_rt", "sb_exp_at", "sb_provider"]:
-        if k in cookies:
-            del cookies[k]
-    cookies.save()
-    return False
-
-
-
 # === i18n：右上角語言切換（登入前也顯示）
 _get_lang_from_qs_or_session()
 
@@ -623,19 +532,11 @@ def auth_gate(require_login: bool = True):
         # === lang 保留：從 qs 讀 lang 值
         current_lang = qp.get("lang", st.session_state.get("lang", "zh-Hant"))
 
-        # === tab 保留：若 URL 沒有就為本分頁產生一次性 ID（只在本區塊用，其他地方不用改）
-        tab_val = qp.get("tab", TAB_ID)
-
         redirect_url = (st.secrets.get("app", {}) or {}).get("redirect_url", "http://localhost:8501/")
         if not redirect_url.endswith("/"):
             redirect_url += "/"
         sep = "&" if ("?" in redirect_url) else "?"
-        # ⬇⬇ 這裡改：把 tab 一起帶回來 ⬇⬇
-        redirect_with_pv = (
-            f"{redirect_url}{sep}"
-            f"pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(current_lang)}"
-            f"&tab={urllib.parse.quote(tab_val)}"
-        )
+        redirect_with_pv = f"{redirect_url}{sep}pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(current_lang)}"
 
         if not verifier:
             st.error("OAuth 回來缺少 verifier（pv），請重試。")
@@ -648,9 +549,8 @@ def auth_gate(require_login: bool = True):
                     st.error(f"交換 access_token 失敗：{data}")
                 else:
                     st.session_state["user"] = _user_from_auth(user_json, access_token, provider="google")
-                    _save_session_to_cookies(data, provider="google")
                     _set_sb_auth_with_token(access_token)
-                    # === lang/tab 保留：清除 code/pv 等，但保留 lang、tab
+                    # === lang 保留：清除 code/pv 等，但保留 lang
                     keys_to_remove = ["code", "pv", "error", "error_description"]
                     for k in list(st.query_params.keys()):
                         if k in keys_to_remove:
@@ -658,7 +558,6 @@ def auth_gate(require_login: bool = True):
                                 del st.query_params[k]
                             except Exception:
                                 pass
-                    # lang 既有函式，tab 已在 URL 上；這裡不用再動 tab
                     _set_query_lang(current_lang)
                     st.rerun()
             except Exception as e:
@@ -690,20 +589,13 @@ def auth_gate(require_login: bool = True):
             base_url += "/"
         join = "&" if ("?" in base_url) else "?"
         # === lang 保留：register 頁也跟著帶 lang
-        register_url = (
-            f"{base_url}{join}"
-            f"register=1&lang={urllib.parse.quote(st.session_state['lang'])}"
-            f"&tab={urllib.parse.quote(TAB_ID)}"
-        )
+        register_url = f"{base_url}{join}register=1&lang={urllib.parse.quote(st.session_state['lang'])}"
 
         pv_join = "&" if ("?" in base_url) else "?"
         # 將 verifier 與 lang 塞到 redirect_to（PKCE 必要 + 語言保留）
-        # 將 verifier、lang、tab 塞到 redirect_to（PKCE 必要 + 語言/分頁保留）
         redirect_with_pv = (
             f"{base_url}{pv_join}"
-            f"pv={urllib.parse.quote(verifier)}"
-            f"&lang={urllib.parse.quote(st.session_state['lang'])}"
-            f"&tab={urllib.parse.quote(TAB_ID)}"
+            f"pv={urllib.parse.quote(verifier)}&lang={urllib.parse.quote(st.session_state['lang'])}"
         )
 
         google_login_url = (
@@ -750,11 +642,9 @@ def auth_gate(require_login: bool = True):
 
             # 回到登入（同分頁即可）
             st.markdown(
-                f'<a href="{base_url}?lang={urllib.parse.quote(st.session_state["lang"])}&tab={urllib.parse.quote(TAB_ID)}" '
-                f'style="display:inline-block;margin-top:10px;">{t("back_to_login")}</a>',
+                f'<a href="{base_url}?lang={urllib.parse.quote(st.session_state["lang"])}" style="display:inline-block;margin-top:10px;">{t("back_to_login")}</a>',
                 unsafe_allow_html=True
             )
-
             st.stop()  # 註冊頁不再往下渲染登入 UI
 
         # ---- 登入頁（預設）----
@@ -777,22 +667,8 @@ def auth_gate(require_login: bool = True):
                         token = session.access_token
                         _set_sb_auth_with_token(token)
                         st.session_state["user"] = _user_from_auth(user.model_dump(), token, provider="email")
-
-                        # ⭐ 優先用新版 supabase-py 的 model_dump()；失敗就自己組
-                        try:
-                            data = session.model_dump()
-                        except Exception:
-                            data = {
-                                "access_token": getattr(session, "access_token", None),
-                                "refresh_token": getattr(session, "refresh_token", None),
-                                "expires_in": getattr(session, "expires_in", 3600),
-                            }
-
-                        _save_session_to_cookies(data, provider="email")
-
                         st.success(f"登入成功：{st.session_state['user']['email']}")
                         st.rerun()
-
                 except Exception as e:
                     st.error(f"登入失敗：{e}")
 
@@ -826,51 +702,24 @@ def auth_gate(require_login: bool = True):
         else:
             return None
 
-
-
-# ✅ 啟用門神（未登入就無法操作）
-# 先嘗試用 cookie 還原（已登入就會把 st.session_state["user"] 補上）
-_try_restore_session_from_cookies()
-
-user = auth_gate(require_login=True)
-
-if "user" in st.session_state:
+    # C) 已登入 → 顯示狀態 + 登出
     st.info(t("current_login").format(
-        name=st.session_state["user"]["full_name"],
-        email=st.session_state["user"]["email"]
+        name=st.session_state["user"]["full_name"], email=st.session_state["user"]["email"]
     ))
-
     if st.button(t("logout")):
-        # 1) 讓 Supabase session 失效，並切回 anon key
         try:
             sb.auth.sign_out()
-        except Exception:
-            pass
-        try:
             sb.postgrest.auth(st.secrets["supabase"]["anon_key"])
         except Exception:
             pass
-
-        _clear_auth_cookies() 
-
-        # 3) 清掉你 app 用到的 session_state
-        for k in [
-            "user","characters","image_base64","ocr_text","corrected_text",
-            "combined_prompt","prompt_template","prompt_input","translation",
-            "log_id","ocr_version","corrected_text_version",
-            "_char_hint_css","char_uploader_ver","char_fields_ver"
-        ]:
+        for k in ["user","characters","image_base64","ocr_text","corrected_text",
+                  "combined_prompt","prompt_template","prompt_input","translation",
+                  "log_id","ocr_version","corrected_text_version"]:
             st.session_state.pop(k, None)
-
-        # 4) 清 OAuth/註冊用的查詢參數（保留 lang）
-        for k in ["code","pv","error","error_description","register"]:
-            if k in st.query_params:
-                try:
-                    del st.query_params[k]
-                except Exception:
-                    pass
-
         st.rerun()
+
+# ✅ 啟用門神（未登入就無法操作）
+user = auth_gate(require_login=True)
 
 # ===========================================
 # 頁面標題
@@ -1150,19 +999,12 @@ elif menu == "translate":
         #     )
         # }
 
-                # ---------- 工具函式結束 ----------
-
         st.markdown(f"### {t('bg_title')}")
         st.caption(t("bg_caption"))
         # with st.expander(t("example")):
         #     st.code(examples["background_style"], language="markdown")
-        st.text_area(
-            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-            key="background_style",
-            height=200,
-            # ✅ 安全取值：語言異常時回退繁中
-            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_background","")
-        )
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                     key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
 
         if "characters" in st.session_state and st.session_state["characters"]:
             st.markdown(f"### {t('char_traits_title')}")
@@ -1206,24 +1048,17 @@ elif menu == "translate":
         # 術語
         st.markdown(f"### {t('term_title')}")
         st.caption(t("term_caption"))
-        st.text_area(
-            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-            key="terminology",
-            height=200,
-            # ✅ 安全取值
-            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_terminology","")
-        )
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                    key="terminology", height=200,
+                    value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
 
         # 翻譯方針
         st.markdown(f"### {t('policy_title')}")
         st.caption(t("policy_caption"))
-        st.text_area(
-            "輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-            key="translation_policy",
-            height=200,
-            # ✅ 安全取值
-            value=STRINGS.get(st.session_state.get("lang","zh-Hant"), STRINGS["zh-Hant"]).get("tpl_policy","")
-        )
+        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                    key="translation_policy", height=200,
+                    value=STRINGS[st.session_state["lang"]]["tpl_policy"])
+
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
         if st.button(t("btn_save_and_build")):
