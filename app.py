@@ -751,7 +751,7 @@ temperature = st.sidebar.slider(
 def get_user_id():
     # u = st.session_state.get("user") or {}
     # return u.get("id") or "guest"
-    return "guest"
+    return "00000000-0000-0000-0000-000000000000"
 
 def get_user_email():
     u = st.session_state.get("user") or {}
