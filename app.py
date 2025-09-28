@@ -719,7 +719,7 @@ def auth_gate(require_login: bool = True):
         st.rerun()
 
 # ✅ 啟用門神（未登入就無法操作）
-user = auth_gate(require_login=True)
+# user = auth_gate(require_login=True)
 
 # ===========================================
 # 頁面標題
@@ -749,8 +749,9 @@ temperature = st.sidebar.slider(
 # Helper：取得當前使用者 ID / Email
 # ===========================================
 def get_user_id():
-    u = st.session_state.get("user") or {}
-    return u.get("id") or "guest"
+    # u = st.session_state.get("user") or {}
+    # return u.get("id") or "guest"
+    return "guest"
 
 def get_user_email():
     u = st.session_state.get("user") or {}
@@ -758,15 +759,17 @@ def get_user_email():
 
 # 🔸新增：確保寫入/更新前一定用使用者 token（而不是 anon）
 def _ensure_user_token():
-    u = st.session_state.get("user")
-    if not u:
-        return
-    tok = u.get("access_token")
-    if tok:
-        try:
-            sb.postgrest.auth(tok)
-        except Exception:
-            pass
+    # u = st.session_state.get("user")
+    # if not u:
+    #     return
+    # tok = u.get("access_token")
+    # if tok:
+    #     try:
+    #         sb.postgrest.auth(tok)
+    #     except Exception:
+    #         pass
+        return  # 登入關閉，永遠用 anon key
+
 
 # ======================================================
 # 🟢 ステップ1：登場人物登録（穩定版：用版本號重置 key）
