@@ -408,24 +408,58 @@ def ls_remove(key: str):
         key=f"rm_{key}"
     )
 
-# （可選）匿名使用者 ID：同裝置/同瀏覽器維持固定 ID
-def ensure_anon_user_id():
-    key = _ls_key("anon_user_id")
-    uid = streamlit_js_eval(
-        js_expressions=f'localStorage.getItem("{key}")',
-        key="uid_get",
-        want_output=True
-    )
+# # （可選）匿名使用者 ID：同裝置/同瀏覽器維持固定 ID
+# def ensure_anon_user_id():
+#     key = _ls_key("anon_user_id")
+#     uid = streamlit_js_eval(
+#         js_expressions=f'localStorage.getItem("{key}")',
+#         key="uid_get",
+#         want_output=True
+#     )
+#     if not uid:
+#         uid = str(uuid.uuid4())
+#         streamlit_js_eval(
+#             js_expressions=f'localStorage.setItem("{key}", "{uid}")',
+#             key="uid_set"
+#         )
+#     st.session_state["user_id"] = uid
+#     return uid
+
+# ensure_anon_user_id()
+
+def ensure_stable_user_id():
+    """
+    取得穩定的使用者 UID，優先用 Cookie，其次嘗試把舊的 localStorage UID 搬過來，
+    都沒有就產生新的，再同時寫回 Cookie + localStorage。
+    """
+    # 1) 先讀 Cookie
+    uid = _js_get_cookie("mtl_uid")
+
+    # 2) 沒 Cookie → 試圖從舊的 localStorage 搬遷（你之前存的 anon_user_id）
     if not uid:
-        uid = str(uuid.uuid4())
-        streamlit_js_eval(
-            js_expressions=f'localStorage.setItem("{key}", "{uid}")',
-            key="uid_set"
-        )
+        legacy = ls_get(_ls_key("anon_user_id"))
+        if isinstance(legacy, str) and legacy.strip():
+            uid = legacy
+
+    # 3) 兩邊都沒有 → 發一顆新的
+    if not uid:
+        import uuid as _uuid
+        uid = str(_uuid.uuid4())
+
+    # 4) 寫回 Cookie（apex 網域在正式環境共用；localhost 則 host-only）
+    host = streamlit_js_eval(js_expressions="window.location.hostname", key="get_host_for_cookie", want_output=True)
+    domain = _get_apex_for_cookie(host)
+    _js_set_cookie("mtl_uid", uid, days=3650, domain=domain)  # 10 年
+
+    # 5) 同步一份到 localStorage（備援/舊邏輯相容）
+    ls_set(_ls_key("anon_user_id"), uid)
+
+    # 6) 放進 session_state，讓 get_user_id() 直接用
     st.session_state["user_id"] = uid
     return uid
 
-ensure_anon_user_id()
+ensure_stable_user_id()
+
 
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
     """
@@ -516,6 +550,57 @@ def _make_user_scoped_path(user_id: str, subpath: str) -> str:
     return f"users/{user_id}/{subpath}"
 # ---------- Storage Helpers end ----------
 
+# --- Cookie Helpers: 以 cookie 為主、localStorage 為輔 ---
+
+def _js_set_cookie(name: str, value: str, days: int = 365, domain: str | None = None):
+    """
+    在瀏覽器端設置 Cookie。
+    - localhost/127.0.0.1：不能設 domain，否則瀏覽器會忽略
+    - 正式網域：可設成 .example.com 讓子網域共享（請用 _get_apex_for_cookie 判斷）
+    - 自動在 HTTPS 下加上 `Secure`
+    """
+    domain_part = f"; domain={domain}" if domain else ""
+    js = f"""
+    (function(){{
+      var d = new Date();
+      d.setTime(d.getTime() + ({days}*24*60*60*1000));
+      var expires = "expires="+ d.toUTCString();
+      var secure = (location.protocol === 'https:') ? "; secure" : "";
+      document.cookie = "{name}=" + encodeURIComponent("{value}") + ";" + expires + "; path=/" + "{domain_part}" + "; samesite=Lax" + secure;
+    }})();
+    """
+    streamlit_js_eval(js_expressions=js, key=f"set_cookie_{name}")
+
+def _js_get_cookie(name: str):
+    js = f"""
+    (function(){{
+      var nameEQ = "{name}" + "=";
+      var ca = document.cookie.split(';');
+      for(var i=0;i < ca.length;i++) {{
+          var c = ca[i];
+          while (c.charAt(0)==' ') c = c.substring(1,c.length);
+          if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
+      }}
+      return null;
+    }})();
+    """
+    return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
+
+def _get_apex_for_cookie(host: str) -> str | None:
+    """
+    回傳可用於 Cookie 的頂層網域（例：.example.com），
+    - 在正式網域（含點號）時回 .example.com
+    - 在 localhost/127.0.0.1 時回 None（host-only cookie）
+    """
+    if not host:
+        return None
+    if host in ("localhost", "127.0.0.1"):
+        return None
+    if "." in host and not host.endswith(".local"):
+        parts = host.split(".")
+        if len(parts) >= 2:
+            return "." + ".".join(parts[-2:])  # 粗略取 apex，例如 example.com
+    return None
 
 
 
@@ -899,7 +984,8 @@ def get_user_id():
     # u = st.session_state.get("user") or {}
     # return u.get("id") or "guest"
     # return "00000000-0000-0000-0000-000000000000"
-    return st.session_state.get("user_id") or ensure_anon_user_id()
+    return st.session_state.get("user_id") or ensure_stable_user_id()
+
 
 def get_user_email():
     u = st.session_state.get("user") or {}
@@ -1610,47 +1696,3 @@ elif menu == "translate":
 
         if "translation" in st.session_state:
             st.text_area(t("translate_result"), st.session_state["translation"], height=300)
-
-
-# with st.expander("🧪 開發者驗證面板", expanded=False):
-#     st.write("這裡幫你快速檢查目前 session 與 DB 的寫入狀態。")
-
-#     # 1) 檢查主圖 URL 是否可直接顯示（驗證 Storage 是否上傳成功＆可公開讀取）
-#     main_image_url = st.session_state.get("main_image_url")
-#     if main_image_url:
-#         st.markdown("**Main image URL（from Storage）**")
-#         st.code(main_image_url)
-#         try:
-#             st.image(main_image_url, caption="Storage 主圖預覽", width=240)
-#         except Exception as e:
-#             st.warning(f"主圖 URL 顯示失敗：{e}")
-#     else:
-#         st.info("目前沒有 main_image_url（還沒上傳主圖或 session 遺失）。")
-
-#     # 2) 檢查角色清單（包含 image_url）
-#     chars = st.session_state.get("characters") or []
-#     st.markdown("**Characters in session**")
-#     st.json([
-#         {"name": c.get("name"), "image_url": c.get("image_url"), "desc": c.get("description")}
-#         for c in chars
-#     ])
-
-#     # 3) 查 DB：抓目前使用者最新一筆 translation_logs（或草稿）
-#     try:
-#         uid = get_user_id()
-#         q = (sb.table("translation_logs")
-#                .select("id, status, image_url, character_data, ocr_text, corrected_text, created_at")
-#                .eq("user_id", uid)
-#                .order("created_at", desc=True)
-#                .limit(1)
-#                .execute())
-#         if q.data:
-#             st.markdown("**DB：最新一筆 translation_logs**")
-#             st.json(q.data[0])
-#             # 額外顯示 DB 內的 image_url 圖片是否能直接讀
-#             if q.data[0].get("image_url"):
-#                 st.image(q.data[0]["image_url"], caption="DB.image_url 預覽", width=240)
-#         else:
-#             st.info("DB 尚無資料。請先在『翻譯』分頁按『儲存並產生提示內容』建立一筆草稿。")
-#     except Exception as e:
-#         st.error(f"DB 查詢失敗：{e}")
