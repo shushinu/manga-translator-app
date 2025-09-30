@@ -427,20 +427,111 @@ def ensure_anon_user_id():
 
 ensure_anon_user_id()
 
+def _pil_to_base64_jpeg(img: Image.Image, max_w=1280, quality=80) -> str:
+    """縮圖 + JPEG 壓縮，回傳 base64 (不含 data:image/... 前綴)。"""
+    w, h = img.size
+    if w > max_w:
+        new_h = int(h * (max_w / float(w)))
+        img = img.resize((max_w, new_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+def save_main_image_to_ls(img_pil: Image.Image):
+    """把主圖縮圖後，存 localStorage（鍵：mtl:v1:image_base64）。"""
+    try:
+        b64_jpeg = _pil_to_base64_jpeg(img_pil)
+        ls_set(_ls_key("image_base64"), f"data:image/jpeg;base64,{b64_jpeg}")
+    except Exception:
+        pass
+
+def bootstrap_restore_from_ls():
+    """在 app 啟動或切步驟時可呼叫：把 Step1/2 的資料灌回 session。"""
+    # 1) 主圖（縮圖 Base64）
+    try:
+        img_b64 = ls_get(_ls_key("image_base64"))
+        if isinstance(img_b64, str) and img_b64.startswith("data:image/"):
+            # 去掉前綴拿純 base64
+            st.session_state["image_base64"] = img_b64.split(",", 1)[-1]
+    except Exception:
+        pass
+
+    # 2) 角色清單（只回灌 name/description；圖片可後做）
+    try:
+        chars = ls_get(_ls_key("characters"))
+        if isinstance(chars, list):
+            # 只保留 name/description 鍵
+            cleaned = []
+            for c in chars:
+                cleaned.append({
+                    "name": (c or {}).get("name", ""),
+                    "description": (c or {}).get("description", "")
+                })
+            st.session_state["characters"] = cleaned
+    except Exception:
+        pass
+
+    # 3) OCR 結果
+    try:
+        ocr = ls_get(_ls_key("ocr_text"))
+        if isinstance(ocr, str) and ocr.strip():
+            st.session_state["ocr_text"] = ocr
+            # 與你現有版本機制對齊（可有可無）
+            st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0)
+    except Exception:
+        pass
+
+    # 4) 修正稿（讓 Step3 不被擋）
+    try:
+        corr = ls_get(_ls_key("corrected_text"))
+        if isinstance(corr, str) and corr.strip():
+            st.session_state["corrected_text"] = corr
+            st.session_state["corrected_text_version"] = st.session_state.get("ocr_version", 0)
+    except Exception:
+        pass
+
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
-    """把 textarea 綁定到 localStorage。
-    - 第一次渲染先嘗試從 LS 載入；沒有就用 default_value
-    - 每次使用者修改時即時回寫到 LS
-    - 值會放在 st.session_state[key]，你其餘程式照舊讀用
     """
+    把 textarea 綁定到 localStorage，並且解決：
+    1) streamlit_js_eval 首次渲染可能回 None 的問題
+    2) 若 LS 有值、而 session_state 尚未載入，優先採用 LS 值
+    """
+    ls_key = _ls_key(key)
+
+    # 這個旗標用來避免每次都覆蓋；只在第一次成功載入 LS 後打開
+    loaded_flag = f"_ls_loaded::{key}"
+    if loaded_flag not in st.session_state:
+        st.session_state[loaded_flag] = False
+
+    # 嘗試從 LS 讀（第一次可能是 None；之後通常會有值）
+    ls_val = ls_get(ls_key)
+
+    # 只有「尚未把 LS 載入過」時，才嘗試用 LS 覆蓋 session 的初值
+    if not st.session_state[loaded_flag] and isinstance(ls_val, str) and ls_val != "":
+        st.session_state[key] = ls_val
+        st.session_state[loaded_flag] = True
+
+    # 如果還沒有值（LS 也沒拿到），至少給一個 default
     if key not in st.session_state:
-        cached = ls_get(_ls_key(key))
-        st.session_state[key] = cached if isinstance(cached, str) else default_value
+        st.session_state[key] = default_value
 
     def _on_change():
-        ls_set(_ls_key(key), st.session_state.get(key, ""))
+        ls_set(ls_key, st.session_state.get(key, ""))
 
     return st.text_area(label, key=key, height=height, on_change=_on_change)
+
+def _persist_characters_to_ls():
+    """把目前角色清單（僅 name/description）寫到 localStorage。"""
+    try:
+        chars = [
+            {"name": c.get("name",""), "description": c.get("description","")}
+            for c in st.session_state.get("characters", [])
+        ]
+        ls_set(_ls_key("characters"), chars)
+    except Exception:
+        pass
+
+
 
 
 # ===========================================
@@ -798,6 +889,11 @@ def auth_gate(require_login: bool = True):
 st.title(t("app_title"))
 
 # ===========================================
+# 頁面還原
+# ===========================================
+bootstrap_restore_from_ls()
+
+# ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
 # ===========================================
 st.sidebar.header(t("sidebar_header"))
@@ -872,6 +968,11 @@ if menu == "ocr":
                 "name": char_name,
                 "description": char_desc
             })
+
+            # ⬇️ 新增：同步角色清單（只存文字）到 localStorage
+            _persist_characters_to_ls()
+
+
             st.success(f"已註冊角色：{char_name}" if st.session_state["lang"] == "zh-Hant" else f"已登记角色：{char_name}")
             st.session_state["char_uploader_ver"] += 1
             st.session_state["char_fields_ver"] += 1
@@ -896,12 +997,20 @@ if menu == "ocr":
                 if st.button(t("btn_update").format(name=char['name']), key=f"update_{i}"):
                     st.session_state["characters"][i]["name"] = new_name
                     st.session_state["characters"][i]["description"] = new_desc
+
+                    # ⬇️ 新增：同步角色清單到 localStorage
+                    _persist_characters_to_ls()
+
                     st.success(f"已更新角色：{new_name}" if st.session_state["lang"] == "zh-Hant" else f"已更新角色：{new_name}")
 
             with col3:
                 if st.button(t("btn_delete"), key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
                     del st.session_state["characters"][i]
+
+                    # ⬇️ 新增：同步角色清單到 localStorage
+                    _persist_characters_to_ls()
+
                     st.success(f"已刪除角色：{deleted_name}" if st.session_state["lang"] == "zh-Hant" else f"已删除角色：{deleted_name}")
                     st.rerun()
 
@@ -914,6 +1023,12 @@ if menu == "ocr":
         image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
         st.session_state["image_base64"] = img_base64
+
+        # ⬇️ 新增：把縮圖（JPEG）存到 localStorage，供刷新/重開時還原
+        try:
+            save_main_image_to_ls(image)
+        except Exception:
+            pass
 
         st.session_state.pop("log_id", None)
         st.session_state.pop("combined_prompt", None)
@@ -955,7 +1070,12 @@ if menu == "ocr":
                     st.session_state["corrected_text_saved"] = False
                     st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0) + 1
 
-                    ls_remove(_ls_key("corrected_text"))
+                    try:
+                        ls_set(_ls_key("ocr_text"), st.session_state["ocr_text"])
+                        # 既有邏輯：清掉舊的修正稿（避免上一張圖的修正稿混入）
+                        ls_remove(_ls_key("corrected_text"))
+                    except Exception:
+                        pass
 
                 except Exception as e:
                     st.error((f"OCR 失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"OCR 失败：{e}"))
