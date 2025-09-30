@@ -980,15 +980,8 @@ st.title(t("app_title"))
 # 🚩 這裡呼叫，之後所有 get_user_id() 都穩定
 ensure_stable_user_id()
 
-st.caption(f"UID：{st.session_state.get('user_id')}｜來源：{st.session_state.get('_uid_src','?')}")
+# st.caption(f"UID：{st.session_state.get('user_id')}｜來源：{st.session_state.get('_uid_src','?')}")
 
-
-# with st.expander("🧪 UID 偵錯（暫時）"):
-#     host = streamlit_js_eval(js_expressions="window.location.hostname", key="host_dbg", want_output=True)
-#     raw_cookie = streamlit_js_eval(js_expressions="document.cookie", key="cookie_dbg", want_output=True)
-#     st.write("hostname =", host)
-#     st.write("document.cookie =", raw_cookie)
-#     st.write("session_state.user_id =", st.session_state.get("user_id"))
 
 # ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
