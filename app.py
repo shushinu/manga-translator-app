@@ -17,7 +17,6 @@ import json, uuid
 # （可選）開啟除錯資訊
 SHOW_DEBUG = False
 
-
 # ===========================================
 # === i18n：語言定義與文字資源
 # ===========================================
@@ -428,69 +427,6 @@ def ensure_anon_user_id():
 
 ensure_anon_user_id()
 
-def _pil_to_base64_jpeg(img: Image.Image, max_w=1280, quality=80) -> str:
-    """縮圖 + JPEG 壓縮，回傳 base64 (不含 data:image/... 前綴)。"""
-    w, h = img.size
-    if w > max_w:
-        new_h = int(h * (max_w / float(w)))
-        img = img.resize((max_w, new_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-def save_main_image_to_ls(img_pil: Image.Image):
-    """把主圖縮圖後，存 localStorage（鍵：mtl:v1:image_base64）。"""
-    try:
-        b64_jpeg = _pil_to_base64_jpeg(img_pil)
-        ls_set(_ls_key("image_base64"), f"data:image/jpeg;base64,{b64_jpeg}")
-    except Exception:
-        pass
-
-def bootstrap_restore_from_ls():
-    """在 app 啟動或切步驟時可呼叫：把 Step1/2 的資料灌回 session。"""
-    # 1) 主圖（縮圖 Base64）
-    try:
-        img_b64 = ls_get(_ls_key("image_base64"))
-        if isinstance(img_b64, str) and img_b64.startswith("data:image/"):
-            # 去掉前綴拿純 base64
-            st.session_state["image_base64"] = img_b64.split(",", 1)[-1]
-    except Exception:
-        pass
-
-    # 2) 角色清單（只回灌 name/description；圖片可後做）
-    try:
-        chars = ls_get(_ls_key("characters"))
-        if isinstance(chars, list):
-            # 只保留 name/description 鍵
-            cleaned = []
-            for c in chars:
-                cleaned.append({
-                    "name": (c or {}).get("name", ""),
-                    "description": (c or {}).get("description", "")
-                })
-            st.session_state["characters"] = cleaned
-    except Exception:
-        pass
-
-    # 3) OCR 結果
-    try:
-        ocr = ls_get(_ls_key("ocr_text"))
-        if isinstance(ocr, str) and ocr.strip():
-            st.session_state["ocr_text"] = ocr
-            # 與你現有版本機制對齊（可有可無）
-            st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0)
-    except Exception:
-        pass
-
-    # 4) 修正稿（讓 Step3 不被擋）
-    try:
-        corr = ls_get(_ls_key("corrected_text"))
-        if isinstance(corr, str) and corr.strip():
-            st.session_state["corrected_text"] = corr
-            st.session_state["corrected_text_version"] = st.session_state.get("ocr_version", 0)
-    except Exception:
-        pass
-
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
     """
     把 textarea 綁定到 localStorage，並且解決：
@@ -521,58 +457,38 @@ def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int 
 
     return st.text_area(label, key=key, height=height, on_change=_on_change)
 
-def _persist_characters_to_ls():
-    """把目前角色清單（含 name/description/縮圖）寫到 localStorage。"""
+# ---------- Storage Helpers（貼在 Helper 區，ls_* 之後即可） ----------
+def _guess_image_mime(filename_or_bytes: str | bytes) -> str:
     try:
-        chars = []
-        for c in st.session_state.get("characters", []):
-            # 嘗試取出 bytes 並轉為 base64
-            img_bytes = c.get("image_bytes")
-            if img_bytes:
-                b64 = base64.b64encode(img_bytes).decode("utf-8")
-                b64 = f"data:image/png;base64,{b64}"
-            else:
-                b64 = None
-            chars.append({
-                "name": c.get("name", ""),
-                "description": c.get("description", ""),
-                "image_base64": b64
-            })
-        ls_set(_ls_key("characters"), chars)
-    except Exception as e:
-        print("❌ persist_characters_to_ls error:", e)
-
-
-# ===========================================
-# 從 localStorage 還原角色清單（含縮圖）到 session_state（只做一次）
-# ===========================================
-if not st.session_state.get("_restored_chars"):
-    try:
-        chars = ls_get(_ls_key("characters"))
+        return "image/png"
     except Exception:
-        chars = None
+        return "image/png"
 
-    if isinstance(chars, list) and chars:
-        st.session_state["characters"] = []
-        for c in chars:
-            img_data = None
-            # 若有存 data URL（例如 "data:image/png;base64,AAAA..."），解出 base64
-            img_data_url = c.get("image_base64")
-            if isinstance(img_data_url, str) and "," in img_data_url:
-                try:
-                    img_data = base64.b64decode(img_data_url.split(",")[1])
-                except Exception:
-                    img_data = None  # 壞掉就當沒圖，UI 做 fallback
+def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str:
+    """
+    上傳 bytes 到 Supabase Storage 的 mtl bucket，若檔名已存在會覆蓋（upsert=True）。
+    會回傳 public URL（bucket 設為 Public 的情況）。
+    """
+    bucket = "mtl"
+    try:
+        sb.storage.from_(bucket).upload(
+            path=path,
+            file=data,
+            file_options={"contentType": content_type, "upsert": True}
+        )
+    except Exception as e:
+        # 若已存在或其它錯誤，可視情況忽略或提示
+        pass
 
-            st.session_state["characters"].append({
-                "name": c.get("name", ""),
-                "description": c.get("description", ""),
-                # 後續 st.image 會優先吃 bytes；若為 None，記得在 UI 做保護
-                "image_bytes": img_data,
-            })
+    # 取得 public URL（Public bucket）
+    url = sb.storage.from_(bucket).get_public_url(path)
+    return url
 
-    # 標記只還原一次，避免後續操作被覆蓋
-    st.session_state["_restored_chars"] = True
+def _make_user_scoped_path(user_id: str, subpath: str) -> str:
+    # e.g. users/<uid>/<subpath>
+    return f"users/{user_id}/{subpath}"
+# ---------- Storage Helpers end ----------
+
 
 
 
@@ -931,11 +847,6 @@ def auth_gate(require_login: bool = True):
 st.title(t("app_title"))
 
 # ===========================================
-# 頁面還原
-# ===========================================
-bootstrap_restore_from_ls()
-
-# ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
 # ===========================================
 st.sidebar.header(t("sidebar_header"))
@@ -1004,17 +915,22 @@ if menu == "ocr":
     if st.button(t("btn_char_add")):
         if char_img and char_name:
             img_bytes = char_img.read()
+
+            # ⚠️ 新增：上傳角色圖到 Storage
+            uid = get_user_id()
+            import uuid as _uuid
+            file_id = str(_uuid.uuid4())
+            # 你也可以保留原始副檔名，這裡用 png 統一
+            storage_path = _make_user_scoped_path(uid, f"characters/{file_id}.png")
+            image_url = storage_upload_bytes(storage_path, img_bytes, content_type="image/png")
+
             st.session_state["characters"] = st.session_state.get("characters", [])
             st.session_state["characters"].append({
                 "image_bytes": img_bytes,
                 "name": char_name,
+                "image_url": image_url,
                 "description": char_desc
             })
-
-            # ⬇️ 新增：同步角色清單（只存文字）到 localStorage
-            _persist_characters_to_ls()
-
-
             st.success(f"已註冊角色：{char_name}" if st.session_state["lang"] == "zh-Hant" else f"已登记角色：{char_name}")
             st.session_state["char_uploader_ver"] += 1
             st.session_state["char_fields_ver"] += 1
@@ -1028,10 +944,26 @@ if menu == "ocr":
             col1, col2, col3 = st.columns([0.3, 0.5, 0.2])
 
             with col1:
+            # 角色縮圖：優先用 bytes（本地即時預覽），沒有再用 URL（跨回合/跨裝置）
                 try:
-                    st.image(Image.open(io.BytesIO(char["image_bytes"])), caption=None, width=100)
+                    img_bytes = char.get("image_bytes")
+                    img_url   = char.get("image_url")
+
+                    if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
+                        st.image(Image.open(io.BytesIO(img_bytes)), caption=None, width=100)
+                    elif isinstance(img_url, str) and img_url:
+                        st.image(img_url, caption=None, width=100)
+                    else:
+                        st.write("（無圖片）" if st.session_state["lang"]=="zh-Hant" else "（无图片）")
+
                 except Exception:
-                    st.image(char.get("image_bytes", None), caption=None, width=100)
+                    # 若 bytes 顯示失敗（格式或壞檔），改用 URL；再不行就顯示佔位文字
+                    img_url = char.get("image_url")
+                    if isinstance(img_url, str) and img_url:
+                        st.image(img_url, caption=None, width=100)
+                    else:
+                        st.write("（無圖片）" if st.session_state["lang"]=="zh-Hant" else "（无图片）")
+
 
             with col2:
                 new_name = st.text_input(f"{('名稱' if st.session_state['lang']=='zh-Hant' else '名称')}（{i}）", char["name"], key=f"edit_name_{i}")
@@ -1039,20 +971,12 @@ if menu == "ocr":
                 if st.button(t("btn_update").format(name=char['name']), key=f"update_{i}"):
                     st.session_state["characters"][i]["name"] = new_name
                     st.session_state["characters"][i]["description"] = new_desc
-
-                    # ⬇️ 新增：同步角色清單到 localStorage
-                    _persist_characters_to_ls()
-
                     st.success(f"已更新角色：{new_name}" if st.session_state["lang"] == "zh-Hant" else f"已更新角色：{new_name}")
 
             with col3:
                 if st.button(t("btn_delete"), key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
                     del st.session_state["characters"][i]
-
-                    # ⬇️ 新增：同步角色清單到 localStorage
-                    _persist_characters_to_ls()
-
                     st.success(f"已刪除角色：{deleted_name}" if st.session_state["lang"] == "zh-Hant" else f"已删除角色：{deleted_name}")
                     st.rerun()
 
@@ -1063,15 +987,19 @@ if menu == "ocr":
         image = Image.open(uploaded_file)
         buffered = io.BytesIO()
         image.save(buffered, format="PNG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        raw_png_bytes = buffered.getvalue()  # ← 取得真正的 bytes
+        img_base64 = base64.b64encode(raw_png_bytes).decode("utf-8")
         st.session_state["image_base64"] = img_base64
 
-        # ⬇️ 新增：把縮圖（JPEG）存到 localStorage，供刷新/重開時還原
-        try:
-            save_main_image_to_ls(image)
-        except Exception:
-            pass
+        # ✅ 上傳主圖到 Storage
+        uid = get_user_id()
+        import uuid as _uuid
+        file_id = str(_uuid.uuid4())
+        main_path = _make_user_scoped_path(uid, f"main/{file_id}.png")
+        main_image_url = storage_upload_bytes(main_path, raw_png_bytes, content_type="image/png")
+        st.session_state["main_image_url"] = main_image_url
 
+        # 清 session 依賴
         st.session_state.pop("log_id", None)
         st.session_state.pop("combined_prompt", None)
         st.session_state.pop("prompt_template", None)
@@ -1079,6 +1007,7 @@ if menu == "ocr":
         st.session_state.pop("translation", None)
         st.session_state.pop("ocr_text", None)
         st.session_state["corrected_text_saved"] = False
+
     elif "image_base64" in st.session_state:
         img_bytes = base64.b64decode(st.session_state["image_base64"])
         image = Image.open(io.BytesIO(img_bytes))
@@ -1112,12 +1041,7 @@ if menu == "ocr":
                     st.session_state["corrected_text_saved"] = False
                     st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0) + 1
 
-                    try:
-                        ls_set(_ls_key("ocr_text"), st.session_state["ocr_text"])
-                        # 既有邏輯：清掉舊的修正稿（避免上一張圖的修正稿混入）
-                        ls_remove(_ls_key("corrected_text"))
-                    except Exception:
-                        pass
+                    ls_remove(_ls_key("corrected_text"))
 
                 except Exception as e:
                     st.error((f"OCR 失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"OCR 失败：{e}"))
@@ -1243,6 +1167,38 @@ elif menu == "translate":
                 "status": "draft",
             }
 
+            # ✅ 新增：主圖 URL
+            main_image_url = st.session_state.get("main_image_url")
+            if main_image_url:
+                payload["image_url"] = main_image_url   # 對應 DB 欄位：image_url (text)
+
+            # ✅ 可選：把目前可得的上下文也一併帶進草稿（若資料表已有對應欄位）
+            # ocr_text = st.session_state.get("ocr_text")
+            # if ocr_text is not None:
+            #     payload["ocr_text"] = ocr_text
+
+            # corrected_text = st.session_state.get("corrected_text")
+            # if corrected_text is not None:
+            #     payload["corrected_text"] = corrected_text
+
+            # # ✅ 角色資料（若 DB 有 character_data: jsonb）
+            chars = st.session_state.get("characters")
+            if chars:
+                try:
+                    # 只保留必要欄位，並帶上角色的 image_url（若已有上傳）
+                    payload["character_data"] = [
+                        {
+                            "name": c.get("name"),
+                            "description": c.get("description"),
+                            "image_url": c.get("image_url") or None,  # 之後你完成上傳後就會有
+                        }
+                        for c in chars
+                    ]
+                except Exception:
+                    pass
+
+
+
             # 可選：把目前可得的上下文也一併帶進草稿（若資料表已有對應欄位）
             ocr_text = st.session_state.get("ocr_text")
             if ocr_text is not None:
@@ -1284,22 +1240,50 @@ elif menu == "translate":
 
             update_dict = {"combined_prompt": combined}
 
-            # 可選：同步目前上下文到草稿（若資料表有欄位）
+            # ✅ 同步主圖 URL（若有）
+            main_image_url = st.session_state.get("main_image_url")
+            if main_image_url:
+                update_dict["image_url"] = main_image_url
+
+            # ✅ 同步 OCR/修正文（若有）
             ocr_text = st.session_state.get("ocr_text")
             if ocr_text is not None:
                 update_dict["ocr_text"] = ocr_text
             corrected_text = st.session_state.get("corrected_text")
             if corrected_text is not None:
                 update_dict["corrected_text"] = corrected_text
+
+            # ✅ 同步角色資料（含 image_url）
             chars = st.session_state.get("characters")
             if chars:
                 try:
                     update_dict["character_data"] = [
-                        {"name": c.get("name"), "description": c.get("description")}
+                        {
+                            "name": c.get("name"),
+                            "description": c.get("description"),
+                            "image_url": c.get("image_url") or None,
+                        }
                         for c in chars
                     ]
                 except Exception:
                     pass
+
+            # 可選：同步目前上下文到草稿（若資料表有欄位）
+            # ocr_text = st.session_state.get("ocr_text")
+            # if ocr_text is not None:
+            #     update_dict["ocr_text"] = ocr_text
+            # corrected_text = st.session_state.get("corrected_text")
+            # if corrected_text is not None:
+            #     update_dict["corrected_text"] = corrected_text
+            # chars = st.session_state.get("characters")
+            # if chars:
+            #     try:
+            #         update_dict["character_data"] = [
+            #             {"name": c.get("name"), "description": c.get("description")}
+            #             for c in chars
+            #         ]
+            #     except Exception:
+            #         pass
 
             sb_client.table("translation_logs").update(update_dict).eq("id", log_id).execute()
             return True
@@ -1594,3 +1578,46 @@ elif menu == "translate":
         if "translation" in st.session_state:
             st.text_area(t("translate_result"), st.session_state["translation"], height=300)
 
+
+with st.expander("🧪 開發者驗證面板", expanded=False):
+    st.write("這裡幫你快速檢查目前 session 與 DB 的寫入狀態。")
+
+    # 1) 檢查主圖 URL 是否可直接顯示（驗證 Storage 是否上傳成功＆可公開讀取）
+    main_image_url = st.session_state.get("main_image_url")
+    if main_image_url:
+        st.markdown("**Main image URL（from Storage）**")
+        st.code(main_image_url)
+        try:
+            st.image(main_image_url, caption="Storage 主圖預覽", width=240)
+        except Exception as e:
+            st.warning(f"主圖 URL 顯示失敗：{e}")
+    else:
+        st.info("目前沒有 main_image_url（還沒上傳主圖或 session 遺失）。")
+
+    # 2) 檢查角色清單（包含 image_url）
+    chars = st.session_state.get("characters") or []
+    st.markdown("**Characters in session**")
+    st.json([
+        {"name": c.get("name"), "image_url": c.get("image_url"), "desc": c.get("description")}
+        for c in chars
+    ])
+
+    # 3) 查 DB：抓目前使用者最新一筆 translation_logs（或草稿）
+    try:
+        uid = get_user_id()
+        q = (sb.table("translation_logs")
+               .select("id, status, image_url, character_data, ocr_text, corrected_text, created_at")
+               .eq("user_id", uid)
+               .order("created_at", desc=True)
+               .limit(1)
+               .execute())
+        if q.data:
+            st.markdown("**DB：最新一筆 translation_logs**")
+            st.json(q.data[0])
+            # 額外顯示 DB 內的 image_url 圖片是否能直接讀
+            if q.data[0].get("image_url"):
+                st.image(q.data[0]["image_url"], caption="DB.image_url 預覽", width=240)
+        else:
+            st.info("DB 尚無資料。請先在『翻譯』分頁按『儲存並產生提示內容』建立一筆草稿。")
+    except Exception as e:
+        st.error(f"DB 查詢失敗：{e}")
