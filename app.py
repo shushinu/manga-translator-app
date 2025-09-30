@@ -466,32 +466,48 @@ def _guess_image_mime(filename_or_bytes: str | bytes) -> str:
 
 def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str | None:
     """
-    上傳 bytes 到 mtl bucket。失敗時會在 UI 顯示錯誤並回傳 None。
+    上傳 bytes 到 Supabase Storage 的 mtl bucket。
+    先嘗試 upload（不帶 upsert，避免 storage3 的 header bool bug）；
+    若檔名已存在造成 409，改用 update 覆蓋。
+    回傳 public URL（bucket 設為 Public）。
     """
     bucket = "mtl"
     try:
+        # ① 先試 upload（不帶 upsert，避免 bool header）
         resp = sb.storage.from_(bucket).upload(
             path=path,
             file=data,
-            file_options={"contentType": content_type, "upsert": True}
+            file_options={"contentType": content_type}  # 不要帶 upsert
         )
-        # httpx/storage3 沒丟例外就視為成功
+        # st.write("📦 upload 回應：", resp)  # 可保留除錯
     except Exception as e:
-        import traceback
-        st.error(f"❌ Storage 上傳失敗：{e}")
-        st.code(traceback.format_exc())
-        return None
+        msg = str(e)
+        # st.write("⚠️ upload 失敗：", msg)  # 可保留除錯
+        # ② 已存在 → 改用 update 覆蓋
+        if "409" in msg or "already exists" in msg.lower():
+            try:
+                resp = sb.storage.from_(bucket).update(
+                    path=path,
+                    file=data,
+                    file_options={"contentType": content_type}
+                )
+                # st.write("📦 update 回應：", resp)
+            except Exception as e2:
+                st.error(f"❌ Storage 覆蓋失敗：{e2}")
+                return None
+        else:
+            st.error(f"❌ Storage 上傳失敗：{e}")
+            return None
 
-    # 回傳 public URL（前提：bucket 已設 Public 且有 SELECT policy）
+    # ③ 取得 public URL（Public bucket）
     try:
         url = sb.storage.from_(bucket).get_public_url(path)
-        if not url:
-            st.warning("⚠️ 取得 public URL 失敗，但物件可能已上傳。請到 Storage 介面確認。")
-            return None
+        # st.write("🌍 Public URL:", url)
         return url
     except Exception as e:
-        st.error(f"❌ 產生 public URL 失敗：{e}")
+        st.error(f"❌ 取得 Public URL 失敗：{e}")
         return None
+
 
 
 
