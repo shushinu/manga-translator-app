@@ -464,57 +464,35 @@ def _guess_image_mime(filename_or_bytes: str | bytes) -> str:
     except Exception:
         return "image/png"
 
-def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str:
+def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str | None:
     """
-    上傳 bytes 到 Storage 的 mtl bucket。
-    - 新版 storage3: upload(..., upsert=True)
-    - 舊版 storage3: 沒有 upsert，就先 upload；若 409 或 already exists 再改用 update 覆蓋。
-    之後回傳乾淨的 public URL（若 bucket 是 Public）。
+    上傳 bytes 到 mtl bucket。失敗時會在 UI 顯示錯誤並回傳 None。
     """
     bucket = "mtl"
-    client = sb.storage.from_(bucket)
-
-    # 1) 嘗試新版：upload(..., upsert=True)
     try:
-        client.upload(
+        resp = sb.storage.from_(bucket).upload(
             path=path,
             file=data,
-            file_options={"contentType": content_type},
-            upsert=True,  # 這行在舊版會噴 TypeError
+            file_options={"contentType": content_type, "upsert": True}
         )
-    except TypeError:
-        # 2) 舊版：沒有 upsert 參數 → 走沒有 upsert 的 upload
-        try:
-            client.upload(
-                path=path,
-                file=data,
-                file_options={"contentType": content_type},
-            )
-        except Exception as e:
-            # 若檔名已存在（409 / already exists），改用 update 覆蓋
-            msg = str(e).lower()
-            if "409" in msg or "exists" in msg or "conflict" in msg:
-                client.update(
-                    path=path,
-                    file=data,
-                    file_options={"contentType": content_type},
-                )
-            else:
-                raise
-    except Exception:
-        # 其它異常直接拋出（方便你在 UI 看錯誤）
-        raise
+        # httpx/storage3 沒丟例外就視為成功
+    except Exception as e:
+        import traceback
+        st.error(f"❌ Storage 上傳失敗：{e}")
+        st.code(traceback.format_exc())
+        return None
 
-    # 3) 取 public URL（不同版本回傳型別不一樣，統一抽取）
-    res = client.get_public_url(path)
-    if isinstance(res, str):
-        url = res
-    elif isinstance(res, dict):
-        url = ((res.get("data") or {}).get("publicUrl")
-               or res.get("publicUrl") or "")
-    else:
-        url = str(res or "")
-    return url.rstrip("?")
+    # 回傳 public URL（前提：bucket 已設 Public 且有 SELECT policy）
+    try:
+        url = sb.storage.from_(bucket).get_public_url(path)
+        if not url:
+            st.warning("⚠️ 取得 public URL 失敗，但物件可能已上傳。請到 Storage 介面確認。")
+            return None
+        return url
+    except Exception as e:
+        st.error(f"❌ 產生 public URL 失敗：{e}")
+        return None
+
 
 
 def _make_user_scoped_path(user_id: str, subpath: str) -> str:
