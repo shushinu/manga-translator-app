@@ -952,7 +952,7 @@ if menu == "ocr":
             image_url = storage_upload_bytes(storage_path, img_bytes, content_type="image/png")
 
             # 👇 這行是偵錯輸出（角色圖）
-            st.write("character_image_url =", image_url)
+            # st.write("character_image_url =", image_url)
 
             st.session_state["characters"] = st.session_state.get("characters", [])
             st.session_state["characters"].append({
@@ -1028,7 +1028,7 @@ if menu == "ocr":
         main_path = _make_user_scoped_path(uid, f"main/{file_id}.png")
         main_image_url = storage_upload_bytes(main_path, raw_png_bytes, content_type="image/png")
 
-        st.write("main_image_url =", main_image_url)
+        # st.write("main_image_url =", main_image_url)
 
         st.session_state["main_image_url"] = main_image_url
 
