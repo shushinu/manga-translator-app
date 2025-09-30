@@ -934,7 +934,7 @@ elif menu == "translate":
     else:
         st.subheader(t("translate_input_title"))
 
-        # ---------- 工具函式（只定義，不會自動寫庫） ----------
+        # ---------- 工具函式（只定義，整合草稿／定稿邏輯） ----------
         def _get_combined() -> str:
             return (
                 st.session_state.get("combined_prompt")
@@ -944,43 +944,135 @@ elif menu == "translate":
             ).strip()
 
         def _create_log_only_here(sb_client, combined_text: str):
-            if st.session_state.get("log_id") or not combined_text:
+            """
+            改為「草稿／定稿」邏輯：
+            1) 若 session 內已有 log_id -> 直接沿用
+            2) 若無 log_id -> 先嘗試在 DB 找 user_id 的 'draft'，有則沿用；無才 insert 新草稿
+            新草稿僅在沒有現存草稿時才會 insert
+            """
+            if st.session_state.get("log_id"):
                 return st.session_state.get("log_id")
+            if not combined_text:
+                return None
+
             _ensure_user_token()
+
+            user_id = get_user_id()
+
+            # 先找是否已有草稿
+            try:
+                q = (
+                    sb_client.table("translation_logs")
+                    .select("id")
+                    .eq("user_id", user_id)
+                    .eq("status", "draft")
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                if q.data:
+                    draft_id = q.data[0]["id"]
+                    st.session_state["log_id"] = draft_id
+                    return draft_id
+            except Exception:
+                # 找不到草稿時就走 insert
+                pass
+
+            # 沒有草稿 -> 建立新草稿
+            payload = {
+                "user_id": user_id,
+                "combined_prompt": combined_text,
+                "output_text": None,
+                "status": "draft",
+            }
+
+            # 可選：把目前可得的上下文也一併帶進草稿（若資料表已有對應欄位）
+            ocr_text = st.session_state.get("ocr_text")
+            if ocr_text is not None:
+                payload["ocr_text"] = ocr_text
+            corrected_text = st.session_state.get("corrected_text")
+            if corrected_text is not None:
+                payload["corrected_text"] = corrected_text
+            # 角色資料（若有欄位 character_data 可放 JSONB）
+            chars = st.session_state.get("characters")
+            if chars:
+                try:
+                    # 只保留必要欄位
+                    payload["character_data"] = [
+                        {"name": c.get("name"), "description": c.get("description")}
+                        for c in chars
+                    ]
+                except Exception:
+                    pass
+
             res = (
                 sb_client.table("translation_logs")
-                .insert({
-                    "user_id": get_user_id(),
-                    "combined_prompt": combined_text,
-                    "output_text": None,
-                })
+                .insert(payload)
                 .execute()
             )
             new_id = res.data[0]["id"]
             st.session_state["log_id"] = new_id
-            st.toast("💾 已建立輸入紀錄（等待譯文）" if st.session_state["lang"]=="zh-Hant" else "💾 已建立输入纪录（等待译文）", icon="💾")
+            st.toast("💾 已建立草稿（等待譯文）" if st.session_state["lang"]=="zh-Hant" else "💾 已建立草稿（等待译文）", icon="💾")
             return new_id
 
         def _update_prompt_if_possible(sb_client):
+            """
+            若有草稿 log_id -> 更新該筆的 combined_prompt（以及可選同步的 ocr/corrected/character_data）
+            """
             log_id = st.session_state.get("log_id")
             combined = _get_combined()
             if not (log_id and combined):
                 return False
             _ensure_user_token()
-            sb_client.table("translation_logs").update(
-                {"combined_prompt": combined}
-            ).eq("id", log_id).execute()
+
+            update_dict = {"combined_prompt": combined}
+
+            # 可選：同步目前上下文到草稿（若資料表有欄位）
+            ocr_text = st.session_state.get("ocr_text")
+            if ocr_text is not None:
+                update_dict["ocr_text"] = ocr_text
+            corrected_text = st.session_state.get("corrected_text")
+            if corrected_text is not None:
+                update_dict["corrected_text"] = corrected_text
+            chars = st.session_state.get("characters")
+            if chars:
+                try:
+                    update_dict["character_data"] = [
+                        {"name": c.get("name"), "description": c.get("description")}
+                        for c in chars
+                    ]
+                except Exception:
+                    pass
+
+            sb_client.table("translation_logs").update(update_dict).eq("id", log_id).execute()
             return True
 
         def _update_output_if_possible(sb_client):
+            """
+            生成譯文後：
+            1) 把 output_text 寫回草稿
+            2) 將該筆標記為 finalized（並寫 finalized_at）
+            3) 清掉 session 的 log_id，避免後續誤用
+            """
             log_id = st.session_state.get("log_id")
             output = (st.session_state.get("translation") or "").strip()
             if not (log_id and output):
                 return False
             _ensure_user_token()
+
+            from datetime import datetime, timezone
+            finalized_at = datetime.now(timezone.utc).isoformat()
+
             sb_client.table("translation_logs").update(
-                {"output_text": output}
+                {
+                    "output_text": output,
+                    "status": "finalized",
+                    "finalized_at": finalized_at,
+                }
             ).eq("id", log_id).execute()
+
+            # 這一步很重要：定稿後結束草稿狀態
+            st.session_state.pop("log_id", None)
             return True
         # ---------- 工具函式結束 ----------
 
