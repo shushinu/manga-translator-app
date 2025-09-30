@@ -410,20 +410,15 @@ def ls_remove(key: str):
 
 # --- Cookie Helpers: 以 cookie 為主、localStorage 為輔 ---
 
-def _js_set_cookie(name: str, value: str, days: int = 365, domain: str | None = None):
-    """
-    在瀏覽器端設置 Cookie。
-    - localhost/127.0.0.1：不要設 domain（瀏覽器會忽略）
-    - 正式網域：可設成 .example.com 讓子網域共享
-    """
-    domain_part = f"; domain={domain}" if domain else ""
+# --- Cookie Helpers（host-only，最穩；不要設 domain） ---
+def _js_set_cookie(name: str, value: str, days: int = 365):
     js = f"""
     (function(){{
       var d = new Date();
       d.setTime(d.getTime() + ({days}*24*60*60*1000));
       var expires = "expires="+ d.toUTCString();
       var secure = (location.protocol === 'https:') ? "; secure" : "";
-      document.cookie = "{name}=" + encodeURIComponent("{value}") + ";" + expires + "; path=/" + "{domain_part}" + "; samesite=Lax" + secure;
+      document.cookie = "{name}=" + encodeURIComponent("{value}") + ";" + expires + "; path=/" + "; samesite=Lax" + secure;
     }})();
     """
     streamlit_js_eval(js_expressions=js, key=f"set_cookie_{name}")
@@ -443,101 +438,34 @@ def _js_get_cookie(name: str):
     """
     return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
 
-def _get_apex_for_cookie(host: str) -> str | None:
-    """
-    回傳可用於 Cookie 的頂層網域（例：.example.com）
-    - localhost/127.0.0.1：回 None（host-only cookie）
-    """
-    if not host or host in ("localhost", "127.0.0.1"):
-        return None
-    if "." in host and not host.endswith(".local"):
-        parts = host.split(".")
-        if len(parts) >= 2:
-            return "." + ".".join(parts[-2:])
-    return None
-
 def ensure_stable_user_id():
-    """
-    穩定取得 user_id：優先 Cookie，其次搬舊的 localStorage，
-    都沒有就產生一個新的；最後把值寫回 Cookie + localStorage。
-    """
-    # 1) 先讀 Cookie
+    # 若本回合已經有，就別再動，避免重生
+    if "user_id" in st.session_state and isinstance(st.session_state["user_id"], str) and st.session_state["user_id"]:
+        return st.session_state["user_id"]
+
+    # 1) 先讀 cookie
     uid = _js_get_cookie("mtl_uid")
 
-    # 2) 沒 Cookie → 試著搬舊的 localStorage（與你之前 anon_user_id 相容）
+    # 2) 沒 cookie → 試搬舊 localStorage（相容你之前的 anon_user_id）
     if not uid:
         legacy = ls_get(_ls_key("anon_user_id"))
         if isinstance(legacy, str) and legacy.strip():
             uid = legacy
 
-    # 3) 兩邊都沒有 → 發一顆新的
+    # 3) 兩邊都沒有 → 生一個新的
     if not uid:
         uid = str(uuid.uuid4())
 
-    # 4) 寫回 Cookie（正式網域設 apex；本機不設 domain）
-    host = streamlit_js_eval(js_expressions="window.location.hostname", key="get_host_for_cookie", want_output=True) or ""
-    domain = _get_apex_for_cookie(host)
-    _js_set_cookie("mtl_uid", uid, days=3650, domain=domain)  # 10 年
-
-    # 5) 同步一份到 localStorage（備援）
+    # 4) 寫回 cookie + localStorage
+    _js_set_cookie("mtl_uid", uid, days=3650)  # 10 年
     ls_set(_ls_key("anon_user_id"), uid)
 
-    # 6) 放進 session_state，讓 get_user_id() 使用
+    # 5) 放進 session
     st.session_state["user_id"] = uid
     return uid
 
 
-# # （可選）匿名使用者 ID：同裝置/同瀏覽器維持固定 ID
-# def ensure_anon_user_id():
-#     key = _ls_key("anon_user_id")
-#     uid = streamlit_js_eval(
-#         js_expressions=f'localStorage.getItem("{key}")',
-#         key="uid_get",
-#         want_output=True
-#     )
-#     if not uid:
-#         uid = str(uuid.uuid4())
-#         streamlit_js_eval(
-#             js_expressions=f'localStorage.setItem("{key}", "{uid}")',
-#             key="uid_set"
-#         )
-#     st.session_state["user_id"] = uid
-#     return uid
-
-# ensure_anon_user_id()
-
-def ensure_stable_user_id():
-    """
-    取得穩定的使用者 UID，優先用 Cookie，其次嘗試把舊的 localStorage UID 搬過來，
-    都沒有就產生新的，再同時寫回 Cookie + localStorage。
-    """
-    # 1) 先讀 Cookie
-    uid = _js_get_cookie("mtl_uid")
-
-    # 2) 沒 Cookie → 試圖從舊的 localStorage 搬遷（你之前存的 anon_user_id）
-    if not uid:
-        legacy = ls_get(_ls_key("anon_user_id"))
-        if isinstance(legacy, str) and legacy.strip():
-            uid = legacy
-
-    # 3) 兩邊都沒有 → 發一顆新的
-    if not uid:
-        import uuid as _uuid
-        uid = str(_uuid.uuid4())
-
-    # 4) 寫回 Cookie（apex 網域在正式環境共用；localhost 則 host-only）
-    host = streamlit_js_eval(js_expressions="window.location.hostname", key="get_host_for_cookie", want_output=True)
-    domain = _get_apex_for_cookie(host)
-    _js_set_cookie("mtl_uid", uid, days=3650, domain=domain)  # 10 年
-
-    # 5) 同步一份到 localStorage（備援/舊邏輯相容）
-    ls_set(_ls_key("anon_user_id"), uid)
-
-    # 6) 放進 session_state，讓 get_user_id() 直接用
-    st.session_state["user_id"] = uid
-    return uid
-
-ensure_stable_user_id()
+# ensure_stable_user_id()
 
 
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
@@ -985,6 +913,16 @@ def auth_gate(require_login: bool = True):
 # 頁面標題
 # ===========================================
 st.title(t("app_title"))
+
+# 🚩 這裡呼叫，之後所有 get_user_id() 都穩定
+ensure_stable_user_id()
+
+with st.expander("🧪 UID 偵錯（暫時）"):
+    host = streamlit_js_eval(js_expressions="window.location.hostname", key="host_dbg", want_output=True)
+    raw_cookie = streamlit_js_eval(js_expressions="document.cookie", key="cookie_dbg", want_output=True)
+    st.write("hostname =", host)
+    st.write("document.cookie =", raw_cookie)
+    st.write("session_state.user_id =", st.session_state.get("user_id"))
 
 # ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
