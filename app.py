@@ -408,6 +408,69 @@ def ls_remove(key: str):
         key=f"rm_{key}"
     )
 
+# ========= 放在 Helper 區（ls_* 後面即可） =========
+def ensure_stable_user_id():
+    """
+    兩段式握手：
+    1) 先嘗試讀 cookie；若讀到 → 直接使用
+    2) 讀不到且尚未嘗試過 → 讓前端先把「既有的 LS UID」寫回 cookie，並 stop 一次讓前端完成
+    3) 下一輪還是讀不到 → 這才生成新 UUID，寫入 cookie + LS，然後 st.rerun()
+    """
+    # 已經有就直接用（避免重覆跑邏輯）
+    if st.session_state.get("user_id"):
+        return st.session_state["user_id"]
+
+    # 讀 cookie（第一次渲染常常會回 None/空字串）
+    uid_from_cookie = streamlit_js_eval(
+        js_expressions=(
+            """
+            (function() {
+              const m = document.cookie.match(/(?:^|; )mtl_uid=([^;]+)/);
+              return m ? decodeURIComponent(m[1]) : "";
+            })()
+            """
+        ),
+        key="uid_read_cookie",
+        want_output=True,
+    ) or ""
+
+    if uid_from_cookie:
+        st.session_state["user_id"] = uid_from_cookie
+        st.session_state["_uid_src"] = "cookie"
+        return uid_from_cookie
+
+    # 還沒有 cookie → 第一次嘗試：把 LS 既有的 anon_user_id 寫回 cookie，然後停止本輪渲染
+    if not st.session_state.get("_uid_stage1_tried"):
+        st.session_state["_uid_stage1_tried"] = True
+
+        # 從 LS 撈舊的 anon_user_id（如果本機之前用過就會有）
+        legacy = ls_get(_ls_key("anon_user_id"))
+        legacy = legacy if isinstance(legacy, str) and legacy.strip() else ""
+
+        # 指示前端把 legacy 寫回 cookie（若沒有 legacy，只是做個 no-op，等下一輪進入 stage2）
+        js = (
+            f'document.cookie="mtl_uid={legacy}; Max-Age=315360000; path=/; SameSite=Lax";'
+            if legacy else
+            'void 0;'
+        )
+        streamlit_js_eval(js_expressions=js, key="uid_stage1_set_cookie")
+        # 讓前端有時間寫入，這一輪先停；下一輪我們會再讀一次
+        st.stop()
+
+    # 第二輪仍讀不到 → 真的創建新 UUID，寫 cookie + LS，然後 rerun
+    new_uid = str(uuid.uuid4())
+    streamlit_js_eval(
+        js_expressions=(
+            f'document.cookie="mtl_uid={new_uid}; Max-Age=315360000; path=/; SameSite=Lax";'
+            f'localStorage.setItem("{_ls_key("anon_user_id")}", "{new_uid}");'
+        ),
+        key="uid_stage2_set_cookie_and_ls"
+    )
+    st.session_state["user_id"] = new_uid
+    st.session_state["_uid_src"] = "new"
+    st.rerun()
+
+
 # --- Cookie Helpers: 以 cookie 為主、localStorage 為輔 ---
 
 # --- Cookie Helpers（host-only，最穩；不要設 domain） ---
@@ -438,31 +501,31 @@ def _js_get_cookie(name: str):
     """
     return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
 
-def ensure_stable_user_id():
-    # 若本回合已經有，就別再動，避免重生
-    if "user_id" in st.session_state and isinstance(st.session_state["user_id"], str) and st.session_state["user_id"]:
-        return st.session_state["user_id"]
+# def ensure_stable_user_id():
+#     # 若本回合已經有，就別再動，避免重生
+#     if "user_id" in st.session_state and isinstance(st.session_state["user_id"], str) and st.session_state["user_id"]:
+#         return st.session_state["user_id"]
 
-    # 1) 先讀 cookie
-    uid = _js_get_cookie("mtl_uid")
+#     # 1) 先讀 cookie
+#     uid = _js_get_cookie("mtl_uid")
 
-    # 2) 沒 cookie → 試搬舊 localStorage（相容你之前的 anon_user_id）
-    if not uid:
-        legacy = ls_get(_ls_key("anon_user_id"))
-        if isinstance(legacy, str) and legacy.strip():
-            uid = legacy
+#     # 2) 沒 cookie → 試搬舊 localStorage（相容你之前的 anon_user_id）
+#     if not uid:
+#         legacy = ls_get(_ls_key("anon_user_id"))
+#         if isinstance(legacy, str) and legacy.strip():
+#             uid = legacy
 
-    # 3) 兩邊都沒有 → 生一個新的
-    if not uid:
-        uid = str(uuid.uuid4())
+#     # 3) 兩邊都沒有 → 生一個新的
+#     if not uid:
+#         uid = str(uuid.uuid4())
 
-    # 4) 寫回 cookie + localStorage
-    _js_set_cookie("mtl_uid", uid, days=3650)  # 10 年
-    ls_set(_ls_key("anon_user_id"), uid)
+#     # 4) 寫回 cookie + localStorage
+#     _js_set_cookie("mtl_uid", uid, days=3650)  # 10 年
+#     ls_set(_ls_key("anon_user_id"), uid)
 
-    # 5) 放進 session
-    st.session_state["user_id"] = uid
-    return uid
+#     # 5) 放進 session
+#     st.session_state["user_id"] = uid
+#     return uid
 
 
 # ensure_stable_user_id()
@@ -917,12 +980,15 @@ st.title(t("app_title"))
 # 🚩 這裡呼叫，之後所有 get_user_id() 都穩定
 ensure_stable_user_id()
 
-with st.expander("🧪 UID 偵錯（暫時）"):
-    host = streamlit_js_eval(js_expressions="window.location.hostname", key="host_dbg", want_output=True)
-    raw_cookie = streamlit_js_eval(js_expressions="document.cookie", key="cookie_dbg", want_output=True)
-    st.write("hostname =", host)
-    st.write("document.cookie =", raw_cookie)
-    st.write("session_state.user_id =", st.session_state.get("user_id"))
+st.caption(f"UID：{st.session_state.get('user_id')}｜來源：{st.session_state.get('_uid_src','?')}")
+
+
+# with st.expander("🧪 UID 偵錯（暫時）"):
+#     host = streamlit_js_eval(js_expressions="window.location.hostname", key="host_dbg", want_output=True)
+#     raw_cookie = streamlit_js_eval(js_expressions="document.cookie", key="cookie_dbg", want_output=True)
+#     st.write("hostname =", host)
+#     st.write("document.cookie =", raw_cookie)
+#     st.write("session_state.user_id =", st.session_state.get("user_id"))
 
 # ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
