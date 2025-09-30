@@ -11,6 +11,9 @@ import requests
 import urllib.parse
 from supabase import create_client
 
+from streamlit_js_eval import streamlit_js_eval
+import json, uuid
+
 # （可選）開啟除錯資訊
 SHOW_DEBUG = False
 
@@ -313,7 +316,7 @@ STRINGS = {
             "【输出格式要求】纯文字、只有译文本身；若输入是多行，就输出等量多行；不要出现任何多余符号或区段标题。"
         ),
         "combined_header": (
-            "请根据下列参考资料，将提供的日文漫画对白翻译为自然、符合角色语气的简体中文"
+            "请根据下列参考资料，将提供的日文漫画对白翻译为自然、符合角色语气的简体中文。"
             "请特别注意情感、语气、时代背景、人物性格与专业用语的使用。"
         ),
         "sec_background": "【作品背景与风格】\n{content}\n\n",
@@ -371,6 +374,74 @@ except Exception as e:
 # OpenAI 初始化
 # ===========================================
 client = OpenAI(api_key=st.secrets["openai"]["api_key"])
+
+# ===========================================
+# Helper
+# ===========================================
+
+# 建議做命名空間前綴，避免跟其他專案/頁面衝突
+APP_LS_PREFIX = "mtl:v1:"
+
+def _ls_key(name: str) -> str:
+    return f"{APP_LS_PREFIX}{name}"
+
+def ls_get(key: str, default=None):
+    """從 localStorage 讀 JSON；不存在時回傳 default。"""
+    val = streamlit_js_eval(
+        js_expressions=f'JSON.parse(localStorage.getItem("{key}") ?? "null")',
+        key=f"get_{key}",
+        want_output=True
+    )
+    return default if val is None else val
+
+def ls_set(key: str, value):
+    """寫入 JSON 到 localStorage。"""
+    payload = json.dumps(value, ensure_ascii=False)
+    streamlit_js_eval(
+        js_expressions=f'localStorage.setItem("{key}", JSON.stringify({payload}))',
+        key=f"set_{key}"
+    )
+
+def ls_remove(key: str):
+    streamlit_js_eval(
+        js_expressions=f'localStorage.removeItem("{key}")',
+        key=f"rm_{key}"
+    )
+
+# （可選）匿名使用者 ID：同裝置/同瀏覽器維持固定 ID
+def ensure_anon_user_id():
+    key = _ls_key("anon_user_id")
+    uid = streamlit_js_eval(
+        js_expressions=f'localStorage.getItem("{key}")',
+        key="uid_get",
+        want_output=True
+    )
+    if not uid:
+        uid = str(uuid.uuid4())
+        streamlit_js_eval(
+            js_expressions=f'localStorage.setItem("{key}", "{uid}")',
+            key="uid_set"
+        )
+    st.session_state["user_id"] = uid
+    return uid
+
+ensure_anon_user_id()
+
+def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
+    """把 textarea 綁定到 localStorage。
+    - 第一次渲染先嘗試從 LS 載入；沒有就用 default_value
+    - 每次使用者修改時即時回寫到 LS
+    - 值會放在 st.session_state[key]，你其餘程式照舊讀用
+    """
+    if key not in st.session_state:
+        cached = ls_get(_ls_key(key))
+        st.session_state[key] = cached if isinstance(cached, str) else default_value
+
+    def _on_change():
+        ls_set(_ls_key(key), st.session_state.get(key, ""))
+
+    return st.text_area(label, key=key, height=height, on_change=_on_change)
+
 
 # ===========================================
 # 🔐 混合登入（Authorization Code + PKCE）
@@ -751,7 +822,8 @@ temperature = st.sidebar.slider(
 def get_user_id():
     # u = st.session_state.get("user") or {}
     # return u.get("id") or "guest"
-    return "00000000-0000-0000-0000-000000000000"
+    # return "00000000-0000-0000-0000-000000000000"
+    return st.session_state.get("user_id") or ensure_anon_user_id()
 
 def get_user_email():
     u = st.session_state.get("user") or {}
@@ -882,6 +954,9 @@ if menu == "ocr":
                     st.session_state["ocr_text"] = response.choices[0].message.content.strip()
                     st.session_state["corrected_text_saved"] = False
                     st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0) + 1
+
+                    ls_remove(_ls_key("corrected_text"))
+
                 except Exception as e:
                     st.error((f"OCR 失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"OCR 失败：{e}"))
 
@@ -910,10 +985,25 @@ elif menu == "edit":
         with col2:
             st.markdown(t("corr_area"))
 
+            # ── ① 若 session 裡還沒有 corrected_text，先嘗試從 localStorage 載入（只插入，不改原邏輯）
+            try:
+                if "corrected_text" not in st.session_state:
+                    cached_corr = ls_get(_ls_key("corrected_text"))
+                    if isinstance(cached_corr, str) and cached_corr.strip():
+                        st.session_state["corrected_text"] = cached_corr
+            except Exception:
+                pass
+
             current_version = st.session_state.get("ocr_version", 0)
             if st.session_state.get("corrected_text_version") != current_version:
                 st.session_state["corrected_text"] = st.session_state["ocr_text"]
                 st.session_state["corrected_text_version"] = current_version
+                # （可選）OCR 版本變更時，同步清掉/覆寫 localStorage 的草稿，避免舊稿混入
+                try:
+                    # 清掉舊草稿（若你想保留可改成 ls_set 覆寫）
+                    ls_remove(_ls_key("corrected_text"))
+                except Exception:
+                    pass
 
             new_text = st.text_area(
                 t("corr_input_label"),
@@ -923,6 +1013,11 @@ elif menu == "edit":
 
             if st.button(t("btn_save_corr")):
                 st.session_state["corrected_text"] = new_text
+                # ── ② 使用者按下「保存」時，將最新內容寫回 localStorage（只插入，不改原邏輯）
+                try:
+                    ls_set(_ls_key("corrected_text"), st.session_state.get("corrected_text", ""))
+                except Exception:
+                    pass
                 st.success(t("saved_corr"))
 
 # ======================================================
@@ -1098,8 +1193,13 @@ elif menu == "translate":
         st.caption(t("bg_caption"))
         # with st.expander(t("example")):
         #     st.code(examples["background_style"], language="markdown")
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                     key="background_style", height=200, value=STRINGS[st.session_state["lang"]]["tpl_background"])
+        bind_textarea_with_ls(
+            key="background_style",
+            label="輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            default_value=STRINGS[st.session_state["lang"]]["tpl_background"],
+            height=200
+        )
+
 
         if "characters" in st.session_state and st.session_state["characters"]:
             st.markdown(f"### {t('char_traits_title')}")
@@ -1129,30 +1229,48 @@ elif menu == "translate":
                         else f"🧑‍🎨 {name} 的角色补充（点此展开）")
                 st.markdown(f"<div class='char-hint'>{hint}</div>", unsafe_allow_html=True)
 
-                st.text_area("輸入內容：" if st.session_state["lang"] == "zh-Hant" else "输入内容：",
-                            key=char_key, height=200)
+                bind_textarea_with_ls(
+                    key=char_key,
+                    label="輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+                    default_value=STRINGS[st.session_state["lang"]]["tpl_character"],
+                    height=200
+                )
+
                 st.divider()
 
-            # 清理不存在的角色輸入 key
+            # 清理不存在的角色輸入 key（含同步清掉 localStorage）
             for k in list(st.session_state.keys()):
                 if k.startswith("character_traits_") and k not in valid_trait_keys:
+                    try:
+                        ls_remove(_ls_key(k))  # ← 同步移除瀏覽器 localStorage 的舊值
+                    except Exception:
+                        pass
                     del st.session_state[k]
+
 
         # ===== 這裡開始已經離開清理迴圈（很重要！）=====
 
         # 術語
         st.markdown(f"### {t('term_title')}")
         st.caption(t("term_caption"))
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                    key="terminology", height=200,
-                    value=STRINGS[st.session_state["lang"]]["tpl_terminology"])
+        bind_textarea_with_ls(
+            key="terminology",
+            label="輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            default_value=STRINGS[st.session_state["lang"]]["tpl_terminology"],
+            height=200
+        )
+
 
         # 翻譯方針
         st.markdown(f"### {t('policy_title')}")
         st.caption(t("policy_caption"))
-        st.text_area("輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
-                    key="translation_policy", height=200,
-                    value=STRINGS[st.session_state["lang"]]["tpl_policy"])
+        bind_textarea_with_ls(
+            key="translation_policy",
+            label="輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
+            default_value=STRINGS[st.session_state["lang"]]["tpl_policy"],
+            height=200
+        )
+
 
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
@@ -1223,11 +1341,13 @@ elif menu == "translate":
                 )
 
         st.subheader(t("custom_prompt_title"))
-        st.session_state["prompt_input"] = st.text_area(
-            t("custom_prompt_input"),
-            value=st.session_state.get("prompt_input", ""),
+        bind_textarea_with_ls(
+            key="prompt_input",
+            label=t("custom_prompt_input"),
+            default_value=st.session_state.get("prompt_input",""),
             height=300
         )
+
 
         if st.button(t("btn_save_prompt")):
             st.session_state["prompt_template"] = st.session_state["prompt_input"]
