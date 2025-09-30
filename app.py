@@ -428,35 +428,19 @@ def ensure_anon_user_id():
 ensure_anon_user_id()
 
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
+    """把 textarea 綁定到 localStorage。
+    - 第一次渲染先嘗試從 LS 載入；沒有就用 default_value
+    - 每次使用者修改時即時回寫到 LS
+    - 值會放在 st.session_state[key]，你其餘程式照舊讀用
     """
-    把 textarea 綁定到 localStorage，並且解決：
-    1) streamlit_js_eval 首次渲染可能回 None 的問題
-    2) 若 LS 有值、而 session_state 尚未載入，優先採用 LS 值
-    """
-    ls_key = _ls_key(key)
-
-    # 這個旗標用來避免每次都覆蓋；只在第一次成功載入 LS 後打開
-    loaded_flag = f"_ls_loaded::{key}"
-    if loaded_flag not in st.session_state:
-        st.session_state[loaded_flag] = False
-
-    # 嘗試從 LS 讀（第一次可能是 None；之後通常會有值）
-    ls_val = ls_get(ls_key)
-
-    # 只有「尚未把 LS 載入過」時，才嘗試用 LS 覆蓋 session 的初值
-    if not st.session_state[loaded_flag] and isinstance(ls_val, str) and ls_val != "":
-        st.session_state[key] = ls_val
-        st.session_state[loaded_flag] = True
-
-    # 如果還沒有值（LS 也沒拿到），至少給一個 default
     if key not in st.session_state:
-        st.session_state[key] = default_value
+        cached = ls_get(_ls_key(key))
+        st.session_state[key] = cached if isinstance(cached, str) else default_value
 
     def _on_change():
-        ls_set(ls_key, st.session_state.get(key, ""))
+        ls_set(_ls_key(key), st.session_state.get(key, ""))
 
     return st.text_area(label, key=key, height=height, on_change=_on_change)
-
 
 
 # ===========================================
