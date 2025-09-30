@@ -465,24 +465,32 @@ def _guess_image_mime(filename_or_bytes: str | bytes) -> str:
         return "image/png"
 
 def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str:
-    """
-    上傳 bytes 到 Supabase Storage 的 mtl bucket，若檔名已存在會覆蓋（upsert=True）。
-    會回傳 public URL（bucket 設為 Public 的情況）。
-    """
     bucket = "mtl"
-    try:
-        sb.storage.from_(bucket).upload(
-            path=path,
-            file=data,
-            file_options={"contentType": content_type, "upsert": True}
-        )
-    except Exception as e:
-        # 若已存在或其它錯誤，可視情況忽略或提示
-        pass
 
-    # 取得 public URL（Public bucket）
-    url = sb.storage.from_(bucket).get_public_url(path)
+    # 1) 上傳（保留錯誤）
+    resp = sb.storage.from_(bucket).upload(
+        path=path,
+        file=data,
+        file_options={"contentType": content_type, "upsert": True}  # ← 用 camelCase
+    )
+    # 在畫面上顯示回應，便於除錯
+    st.write("upload resp:", resp)
+
+    # 2) 立即檢查物件是否存在（用 list 當作 stat）
+    parent = "/".join(path.split("/")[:-1])  # 目錄，例如 users/<uid>/main
+    listing = sb.storage.from_(bucket).list(parent)
+    st.write("list:", listing)
+
+    # 3) 產出 public URL（兼容不同回傳格式，並移除尾巴 ?）
+    res = sb.storage.from_(bucket).get_public_url(path)
+    if isinstance(res, str):
+        url = res
+    else:
+        url = (res.get("data", {}) or {}).get("publicUrl", "")
+    url = (url or "").rstrip("?")
+    st.write("public URL:", url)  # 看看長什麼樣
     return url
+
 
 def _make_user_scoped_path(user_id: str, subpath: str) -> str:
     # e.g. users/<uid>/<subpath>
