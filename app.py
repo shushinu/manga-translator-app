@@ -408,6 +408,85 @@ def ls_remove(key: str):
         key=f"rm_{key}"
     )
 
+# --- Cookie Helpers: 以 cookie 為主、localStorage 為輔 ---
+
+def _js_set_cookie(name: str, value: str, days: int = 365, domain: str | None = None):
+    """
+    在瀏覽器端設置 Cookie。
+    - localhost/127.0.0.1：不要設 domain（瀏覽器會忽略）
+    - 正式網域：可設成 .example.com 讓子網域共享
+    """
+    domain_part = f"; domain={domain}" if domain else ""
+    js = f"""
+    (function(){{
+      var d = new Date();
+      d.setTime(d.getTime() + ({days}*24*60*60*1000));
+      var expires = "expires="+ d.toUTCString();
+      var secure = (location.protocol === 'https:') ? "; secure" : "";
+      document.cookie = "{name}=" + encodeURIComponent("{value}") + ";" + expires + "; path=/" + "{domain_part}" + "; samesite=Lax" + secure;
+    }})();
+    """
+    streamlit_js_eval(js_expressions=js, key=f"set_cookie_{name}")
+
+def _js_get_cookie(name: str):
+    js = f"""
+    (function(){{
+      var nameEQ = "{name}" + "=";
+      var ca = document.cookie.split(';');
+      for(var i=0;i < ca.length;i++) {{
+          var c = ca[i];
+          while (c.charAt(0)==' ') c = c.substring(1,c.length);
+          if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
+      }}
+      return null;
+    }})();
+    """
+    return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
+
+def _get_apex_for_cookie(host: str) -> str | None:
+    """
+    回傳可用於 Cookie 的頂層網域（例：.example.com）
+    - localhost/127.0.0.1：回 None（host-only cookie）
+    """
+    if not host or host in ("localhost", "127.0.0.1"):
+        return None
+    if "." in host and not host.endswith(".local"):
+        parts = host.split(".")
+        if len(parts) >= 2:
+            return "." + ".".join(parts[-2:])
+    return None
+
+def ensure_stable_user_id():
+    """
+    穩定取得 user_id：優先 Cookie，其次搬舊的 localStorage，
+    都沒有就產生一個新的；最後把值寫回 Cookie + localStorage。
+    """
+    # 1) 先讀 Cookie
+    uid = _js_get_cookie("mtl_uid")
+
+    # 2) 沒 Cookie → 試著搬舊的 localStorage（與你之前 anon_user_id 相容）
+    if not uid:
+        legacy = ls_get(_ls_key("anon_user_id"))
+        if isinstance(legacy, str) and legacy.strip():
+            uid = legacy
+
+    # 3) 兩邊都沒有 → 發一顆新的
+    if not uid:
+        uid = str(uuid.uuid4())
+
+    # 4) 寫回 Cookie（正式網域設 apex；本機不設 domain）
+    host = streamlit_js_eval(js_expressions="window.location.hostname", key="get_host_for_cookie", want_output=True) or ""
+    domain = _get_apex_for_cookie(host)
+    _js_set_cookie("mtl_uid", uid, days=3650, domain=domain)  # 10 年
+
+    # 5) 同步一份到 localStorage（備援）
+    ls_set(_ls_key("anon_user_id"), uid)
+
+    # 6) 放進 session_state，讓 get_user_id() 使用
+    st.session_state["user_id"] = uid
+    return uid
+
+
 # # （可選）匿名使用者 ID：同裝置/同瀏覽器維持固定 ID
 # def ensure_anon_user_id():
 #     key = _ls_key("anon_user_id")
@@ -551,57 +630,6 @@ def _make_user_scoped_path(user_id: str, subpath: str) -> str:
 # ---------- Storage Helpers end ----------
 
 # --- Cookie Helpers: 以 cookie 為主、localStorage 為輔 ---
-
-def _js_set_cookie(name: str, value: str, days: int = 365, domain: str | None = None):
-    """
-    在瀏覽器端設置 Cookie。
-    - localhost/127.0.0.1：不能設 domain，否則瀏覽器會忽略
-    - 正式網域：可設成 .example.com 讓子網域共享（請用 _get_apex_for_cookie 判斷）
-    - 自動在 HTTPS 下加上 `Secure`
-    """
-    domain_part = f"; domain={domain}" if domain else ""
-    js = f"""
-    (function(){{
-      var d = new Date();
-      d.setTime(d.getTime() + ({days}*24*60*60*1000));
-      var expires = "expires="+ d.toUTCString();
-      var secure = (location.protocol === 'https:') ? "; secure" : "";
-      document.cookie = "{name}=" + encodeURIComponent("{value}") + ";" + expires + "; path=/" + "{domain_part}" + "; samesite=Lax" + secure;
-    }})();
-    """
-    streamlit_js_eval(js_expressions=js, key=f"set_cookie_{name}")
-
-def _js_get_cookie(name: str):
-    js = f"""
-    (function(){{
-      var nameEQ = "{name}" + "=";
-      var ca = document.cookie.split(';');
-      for(var i=0;i < ca.length;i++) {{
-          var c = ca[i];
-          while (c.charAt(0)==' ') c = c.substring(1,c.length);
-          if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
-      }}
-      return null;
-    }})();
-    """
-    return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
-
-def _get_apex_for_cookie(host: str) -> str | None:
-    """
-    回傳可用於 Cookie 的頂層網域（例：.example.com），
-    - 在正式網域（含點號）時回 .example.com
-    - 在 localhost/127.0.0.1 時回 None（host-only cookie）
-    """
-    if not host:
-        return None
-    if host in ("localhost", "127.0.0.1"):
-        return None
-    if "." in host and not host.endswith(".local"):
-        parts = host.split(".")
-        if len(parts) >= 2:
-            return "." + ".".join(parts[-2:])  # 粗略取 apex，例如 example.com
-    return None
-
 
 
 # ===========================================
