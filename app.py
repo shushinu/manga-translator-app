@@ -1579,45 +1579,45 @@ elif menu == "translate":
             st.text_area(t("translate_result"), st.session_state["translation"], height=300)
 
 
-with st.expander("🧪 開發者驗證面板", expanded=False):
-    st.write("這裡幫你快速檢查目前 session 與 DB 的寫入狀態。")
+# with st.expander("🧪 開發者驗證面板", expanded=False):
+#     st.write("這裡幫你快速檢查目前 session 與 DB 的寫入狀態。")
 
-    # 1) 檢查主圖 URL 是否可直接顯示（驗證 Storage 是否上傳成功＆可公開讀取）
-    main_image_url = st.session_state.get("main_image_url")
-    if main_image_url:
-        st.markdown("**Main image URL（from Storage）**")
-        st.code(main_image_url)
-        try:
-            st.image(main_image_url, caption="Storage 主圖預覽", width=240)
-        except Exception as e:
-            st.warning(f"主圖 URL 顯示失敗：{e}")
-    else:
-        st.info("目前沒有 main_image_url（還沒上傳主圖或 session 遺失）。")
+#     # 1) 檢查主圖 URL 是否可直接顯示（驗證 Storage 是否上傳成功＆可公開讀取）
+#     main_image_url = st.session_state.get("main_image_url")
+#     if main_image_url:
+#         st.markdown("**Main image URL（from Storage）**")
+#         st.code(main_image_url)
+#         try:
+#             st.image(main_image_url, caption="Storage 主圖預覽", width=240)
+#         except Exception as e:
+#             st.warning(f"主圖 URL 顯示失敗：{e}")
+#     else:
+#         st.info("目前沒有 main_image_url（還沒上傳主圖或 session 遺失）。")
 
-    # 2) 檢查角色清單（包含 image_url）
-    chars = st.session_state.get("characters") or []
-    st.markdown("**Characters in session**")
-    st.json([
-        {"name": c.get("name"), "image_url": c.get("image_url"), "desc": c.get("description")}
-        for c in chars
-    ])
+#     # 2) 檢查角色清單（包含 image_url）
+#     chars = st.session_state.get("characters") or []
+#     st.markdown("**Characters in session**")
+#     st.json([
+#         {"name": c.get("name"), "image_url": c.get("image_url"), "desc": c.get("description")}
+#         for c in chars
+#     ])
 
-    # 3) 查 DB：抓目前使用者最新一筆 translation_logs（或草稿）
-    try:
-        uid = get_user_id()
-        q = (sb.table("translation_logs")
-               .select("id, status, image_url, character_data, ocr_text, corrected_text, created_at")
-               .eq("user_id", uid)
-               .order("created_at", desc=True)
-               .limit(1)
-               .execute())
-        if q.data:
-            st.markdown("**DB：最新一筆 translation_logs**")
-            st.json(q.data[0])
-            # 額外顯示 DB 內的 image_url 圖片是否能直接讀
-            if q.data[0].get("image_url"):
-                st.image(q.data[0]["image_url"], caption="DB.image_url 預覽", width=240)
-        else:
-            st.info("DB 尚無資料。請先在『翻譯』分頁按『儲存並產生提示內容』建立一筆草稿。")
-    except Exception as e:
-        st.error(f"DB 查詢失敗：{e}")
+#     # 3) 查 DB：抓目前使用者最新一筆 translation_logs（或草稿）
+#     try:
+#         uid = get_user_id()
+#         q = (sb.table("translation_logs")
+#                .select("id, status, image_url, character_data, ocr_text, corrected_text, created_at")
+#                .eq("user_id", uid)
+#                .order("created_at", desc=True)
+#                .limit(1)
+#                .execute())
+#         if q.data:
+#             st.markdown("**DB：最新一筆 translation_logs**")
+#             st.json(q.data[0])
+#             # 額外顯示 DB 內的 image_url 圖片是否能直接讀
+#             if q.data[0].get("image_url"):
+#                 st.image(q.data[0]["image_url"], caption="DB.image_url 預覽", width=240)
+#         else:
+#             st.info("DB 尚無資料。請先在『翻譯』分頁按『儲存並產生提示內容』建立一筆草稿。")
+#     except Exception as e:
+#         st.error(f"DB 查詢失敗：{e}")
