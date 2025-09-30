@@ -1184,13 +1184,43 @@ elif menu == "translate":
             st.success("內容已儲存並整合。" if st.session_state["lang"]=="zh-Hant" else "内容已保存并整合。")
 
             try:
-                if not st.session_state.get("log_id") and combined_prompt.strip():
-                    _create_log_only_here(sb, combined_prompt)
+                # 取得目前組合好的提示內容（combined_prompt）
+                combined_now = combined_prompt.strip()
+
+                # 若提示內容是空的，顯示提示訊息
+                if not combined_now:
+                    st.info(
+                        "⚠️ 尚未建立資料列；請先輸入提示內容。"
+                        if st.session_state["lang"] == "zh-Hant"
+                        else "⚠️ 尚未建立资料列；请先输入提示内容。"
+                    )
                 else:
-                    if _update_prompt_if_possible(sb):
-                        st.toast("✅ 已更新提示內容（同一筆）" if st.session_state["lang"]=="zh-Hant" else "✅ 已更新提示内容（同一笔）", icon="💾")
+                    # 🧩 交由函式自動判斷：沿用現有草稿或建立新的草稿
+                    draft_id = _create_log_only_here(sb, combined_now)
+
+                    # 📥 成功建立或沿用草稿後，把目前的提示內容寫入資料庫（冪等更新）
+                    if draft_id and _update_prompt_if_possible(sb):
+                        st.toast(
+                            "✅ 已更新提示內容（同一筆）"
+                            if st.session_state["lang"] == "zh-Hant"
+                            else "✅ 已更新提示内容（同一笔）",
+                            icon="💾"
+                        )
+                    else:
+                        # 若沒有成功寫入任何資料（極少發生）
+                        st.info(
+                            "⚠️ 未能更新提示內容，請稍後再試。"
+                            if st.session_state["lang"] == "zh-Hant"
+                            else "⚠️ 未能更新提示内容，请稍后再试。"
+                        )
+
             except Exception as e:
-                st.error((f"建立/更新輸入紀錄失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"建立/更新输入纪录失败：{e}"))
+                # 捕捉例外並顯示錯誤（雙語）
+                st.error(
+                    f"❌ 建立或更新輸入紀錄失敗：{e}"
+                    if st.session_state["lang"] == "zh-Hant"
+                    else f"❌ 建立或更新输入纪录失败：{e}"
+                )
 
         st.subheader(t("custom_prompt_title"))
         st.session_state["prompt_input"] = st.text_area(
@@ -1203,13 +1233,45 @@ elif menu == "translate":
             st.session_state["prompt_template"] = st.session_state["prompt_input"]
             st.success("提示內容已儲存" if st.session_state["lang"]=="zh-Hant" else "提示内容已保存")
             try:
-                if st.session_state.get("log_id"):
-                    if _update_prompt_if_possible(sb):
-                        st.toast("✅ 已更新提示內容（同一筆）" if st.session_state["lang"]=="zh-Hant" else "✅ 已更新提示内容（同一笔）", icon="💾")
+                # 取得目前可用的提示內容（依序取 combined_prompt / prompt_template / prompt_input）
+                combined_now = _get_combined().strip()
+
+                # 🧩 檢查提示內容是否為空
+                if not combined_now:
+                    st.info(
+                        "⚠️ 尚未建立資料列；請先輸入提示內容。"
+                        if st.session_state["lang"] == "zh-Hant"
+                        else "⚠️ 尚未建立资料列；请先输入提示内容。"
+                    )
+
                 else:
-                    st.info("尚未建立資料列；請先按「儲存並產生提示內容」。" if st.session_state["lang"]=="zh-Hant" else "尚未建立资料列；请先按“保存并生成提示内容”。")
+                    # 📝 呼叫草稿管理函式：會自動判斷是否沿用現有草稿或新建一筆新的
+                    draft_id = _create_log_only_here(sb, combined_now)
+
+                    # ✅ 若有成功取得草稿 ID，則執行更新（冪等更新）
+                    if draft_id and _update_prompt_if_possible(sb):
+                        st.toast(
+                            "✅ 已更新提示內容（同一筆）"
+                            if st.session_state["lang"] == "zh-Hant"
+                            else "✅ 已更新提示内容（同一笔）",
+                            icon="💾"
+                        )
+                    else:
+                        # ⚠️ 如果沒更新成功（例如無 log_id 或資料庫拒絕）
+                        st.info(
+                            "⚠️ 未能更新提示內容，請稍後再試。"
+                            if st.session_state["lang"] == "zh-Hant"
+                            else "⚠️ 未能更新提示内容，请稍后再试。"
+                        )
+
             except Exception as e:
-                st.error((f"更新提示內容失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"更新提示内容失败：{e}"))
+                # ❌ 捕捉例外並顯示錯誤訊息（雙語）
+                st.error(
+                    f"❌ 更新提示內容失敗：{e}"
+                    if st.session_state["lang"] == "zh-Hant"
+                    else f"❌ 更新提示内容失败：{e}"
+                )
+
 
         if st.button(t("btn_run_translate")):
             prompt_for_translation = (
