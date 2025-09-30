@@ -5,3 +5,4 @@ supabase
 streamlit-supabase-auth
 requests
 streamlit-cookies-manager
+streamlit-js-eval
