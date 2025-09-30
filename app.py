@@ -466,23 +466,56 @@ def _guess_image_mime(filename_or_bytes: str | bytes) -> str:
 
 def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png") -> str:
     """
-    上傳 bytes 到 Supabase Storage 的 mtl bucket，若檔名已存在會覆蓋（upsert=True）。
-    會回傳 public URL（bucket 設為 Public 的情況）。
+    上傳 bytes 到 Storage 的 mtl bucket。
+    - 新版 storage3: upload(..., upsert=True)
+    - 舊版 storage3: 沒有 upsert，就先 upload；若 409 或 already exists 再改用 update 覆蓋。
+    之後回傳乾淨的 public URL（若 bucket 是 Public）。
     """
     bucket = "mtl"
+    client = sb.storage.from_(bucket)
+
+    # 1) 嘗試新版：upload(..., upsert=True)
     try:
-        sb.storage.from_(bucket).upload(
+        client.upload(
             path=path,
             file=data,
-            file_options={"contentType": content_type, "upsert": True}
+            file_options={"contentType": content_type},
+            upsert=True,  # 這行在舊版會噴 TypeError
         )
-    except Exception as e:
-        # 若已存在或其它錯誤，可視情況忽略或提示
-        pass
+    except TypeError:
+        # 2) 舊版：沒有 upsert 參數 → 走沒有 upsert 的 upload
+        try:
+            client.upload(
+                path=path,
+                file=data,
+                file_options={"contentType": content_type},
+            )
+        except Exception as e:
+            # 若檔名已存在（409 / already exists），改用 update 覆蓋
+            msg = str(e).lower()
+            if "409" in msg or "exists" in msg or "conflict" in msg:
+                client.update(
+                    path=path,
+                    file=data,
+                    file_options={"contentType": content_type},
+                )
+            else:
+                raise
+    except Exception:
+        # 其它異常直接拋出（方便你在 UI 看錯誤）
+        raise
 
-    # 取得 public URL（Public bucket）
-    url = sb.storage.from_(bucket).get_public_url(path)
-    return url
+    # 3) 取 public URL（不同版本回傳型別不一樣，統一抽取）
+    res = client.get_public_url(path)
+    if isinstance(res, str):
+        url = res
+    elif isinstance(res, dict):
+        url = ((res.get("data") or {}).get("publicUrl")
+               or res.get("publicUrl") or "")
+    else:
+        url = str(res or "")
+    return url.rstrip("?")
+
 
 def _make_user_scoped_path(user_id: str, subpath: str) -> str:
     # e.g. users/<uid>/<subpath>
@@ -924,6 +957,9 @@ if menu == "ocr":
             storage_path = _make_user_scoped_path(uid, f"characters/{file_id}.png")
             image_url = storage_upload_bytes(storage_path, img_bytes, content_type="image/png")
 
+            # 👇 這行是偵錯輸出（角色圖）
+            st.write("character_image_url =", image_url)
+
             st.session_state["characters"] = st.session_state.get("characters", [])
             st.session_state["characters"].append({
                 "image_bytes": img_bytes,
@@ -997,6 +1033,9 @@ if menu == "ocr":
         file_id = str(_uuid.uuid4())
         main_path = _make_user_scoped_path(uid, f"main/{file_id}.png")
         main_image_url = storage_upload_bytes(main_path, raw_png_bytes, content_type="image/png")
+
+        st.write("main_image_url =", main_image_url)
+
         st.session_state["main_image_url"] = main_image_url
 
         # 清 session 依賴
