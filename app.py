@@ -37,7 +37,7 @@ STRINGS = {
         "menu_edit": "修正辨識文字",
         "menu_translate": "輸入提示並翻譯",
         "temp_label": "翻譯的創造性（temperature）",
-        "temp_help": "值越高越自由、口語更活。",
+        "temp_help": "值越高越自由、口語更活。一般預設數值為0.95，若你希望譯文更貼近原文語氣與內容，可將數值調低。若你希望譯文更自然、像人工翻譯一樣靈活，可將數值調高。",
         # 登入/註冊 UI
         "login_title": "📘 漫畫翻譯支援工具 - 測試版",
         "login_subtitle": "🔐 請先登入",
@@ -192,7 +192,7 @@ STRINGS = {
         "menu_edit": "修正识别文字",
         "menu_translate": "输入提示并翻译",
         "temp_label": "翻译的创造性（temperature）",
-        "temp_help": "值越高越自由、口语更活。",
+        "temp_help": "值越高越自由、口语更活。一般预设数值为0.95，若你希望译文更贴近原文语气与内容，可将数值调低。若你希望译文更自然、像人工翻译一样灵活，可将数值调高。",
         "login_title": "📘 漫画翻译支援工具 - 测试版",
         "login_subtitle": "🔐 请先登录",
         "email": "Email",
