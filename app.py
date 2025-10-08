@@ -127,23 +127,11 @@ STRINGS = {
 4. 該用語在台灣讀者之間有無普遍認知？是否有既定譯名？
 答：
 """,
-        "tpl_policy": """1. 你希望翻譯的整體語氣是什麼？（例如：輕鬆幽默、溫柔體貼、嚴肅冷靜）
-答：
-
-2. 面對目標讀者（例如小學生），用詞上有哪些需要特別注意的地方？
-答：
-
-3. 是希望以直譯的方式盡可能地保留原文意義？還是以意譯的方式翻譯以確保譯文閱讀起來更自然？
-答：
-
-4. 是否有特別需要避免的語氣、詞彙或文化誤解？
-答：
-""",
         # 提示/規則（OCR 與翻譯）
         "ocr_system": """你是一位熟悉日本漫畫版面與閱讀順序的文字抽取助手。請從下方圖片中，只提取下列兩類文字：
 
 1.漫畫的對話框（吹き出し）
-2/漫格內的旁白／敘述框（矩形框、黑底或白底的敘述文字）
+2.漫格內的旁白／敘述框（矩形框、黑底或白底的敘述文字）
 　（⚠️ 不是頁面標題、章節名或作者資訊）
 
 🧩 規則：
@@ -288,22 +276,10 @@ STRINGS = {
 4. 该用语在台湾读者之间有无普遍认知？是否有既定译名？
 答：
 """,
-        "tpl_policy": """1. 你希望翻译的整体语气是什么？（例如：轻松幽默、温柔体贴、严肃冷静）
-答：
-
-2. 面对目标读者（例如小学生），用词上有哪些需要特别注意的地方？
-答：
-
-3. 是希望以直译的方式尽可能地保留原文意义？还是以意译的方式翻译以确保译文读起来更自然？
-答：
-
-4. 是否有特别需要避免的语气、词汇或文化误解？
-答：
-""",
         "ocr_system": """你是一位熟悉日本漫画版面与阅读顺序的文字抽取助手。请从下方图片中，只提取下列两类文字：
 
 1.漫画的对话框（吹き出し）
-2/漫格内的旁白／叙述框（矩形框、黑底或白底的叙述文字）
+2.漫格内的旁白／叙述框（矩形框、黑底或白底的叙述文字）
 　（⚠️ 不是页面标题、章节名或作者资讯）
 
 🧩 规则：
@@ -523,36 +499,6 @@ def _js_get_cookie(name: str):
     """
     return streamlit_js_eval(js_expressions=js, key=f"get_cookie_{name}", want_output=True)
 
-# def ensure_stable_user_id():
-#     # 若本回合已經有，就別再動，避免重生
-#     if "user_id" in st.session_state and isinstance(st.session_state["user_id"], str) and st.session_state["user_id"]:
-#         return st.session_state["user_id"]
-
-#     # 1) 先讀 cookie
-#     uid = _js_get_cookie("mtl_uid")
-
-#     # 2) 沒 cookie → 試搬舊 localStorage（相容你之前的 anon_user_id）
-#     if not uid:
-#         legacy = ls_get(_ls_key("anon_user_id"))
-#         if isinstance(legacy, str) and legacy.strip():
-#             uid = legacy
-
-#     # 3) 兩邊都沒有 → 生一個新的
-#     if not uid:
-#         uid = str(uuid.uuid4())
-
-#     # 4) 寫回 cookie + localStorage
-#     _js_set_cookie("mtl_uid", uid, days=3650)  # 10 年
-#     ls_set(_ls_key("anon_user_id"), uid)
-
-#     # 5) 放進 session
-#     st.session_state["user_id"] = uid
-#     return uid
-
-
-# ensure_stable_user_id()
-
-
 def bind_textarea_with_ls(key: str, label: str, default_value: str, height: int = 200):
     """
     把 textarea 綁定到 localStorage，並且解決：
@@ -605,11 +551,8 @@ def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png"
             file=data,
             file_options={"contentType": content_type}  # 不要帶 upsert
         )
-        # st.write("📦 upload 回應：", resp)  # 可保留除錯
     except Exception as e:
         msg = str(e)
-        # st.write("⚠️ upload 失敗：", msg)  # 可保留除錯
-        # ② 已存在 → 改用 update 覆蓋
         if "409" in msg or "already exists" in msg.lower():
             try:
                 resp = sb.storage.from_(bucket).update(
@@ -617,7 +560,6 @@ def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png"
                     file=data,
                     file_options={"contentType": content_type}
                 )
-                # st.write("📦 update 回應：", resp)
             except Exception as e2:
                 st.error(f"❌ Storage 覆蓋失敗：{e2}")
                 return None
@@ -628,13 +570,10 @@ def storage_upload_bytes(path: str, data: bytes, content_type: str = "image/png"
     # ③ 取得 public URL（Public bucket）
     try:
         url = sb.storage.from_(bucket).get_public_url(path)
-        # st.write("🌍 Public URL:", url)
         return url
     except Exception as e:
         st.error(f"❌ 取得 Public URL 失敗：{e}")
         return None
-
-
 
 
 def _make_user_scoped_path(user_id: str, subpath: str) -> str:
@@ -987,7 +926,7 @@ def auth_gate(require_login: bool = True):
             pass
         for k in ["user","characters","image_base64","ocr_text","corrected_text",
                   "combined_prompt","prompt_template","prompt_input","translation",
-                  "log_id","ocr_version","corrected_text_version"]:
+                  "log_id","ocr_version","corrected_text_version", "pages", "main_image_url"]:
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -1004,6 +943,72 @@ ensure_stable_user_id()
 
 # st.caption(f"UID：{st.session_state.get('user_id')}｜來源：{st.session_state.get('_uid_src','?')}")
 
+# ===========================================
+# ========= 新增：多頁與 DB upsert 用 Helper =========
+# ===========================================
+def ensure_pages_list():
+    """初始化 pages 陣列。每一頁是一個 dict：image_url/raw_bytes/ocr_text/corrected_text/output_text"""
+    st.session_state.setdefault("pages", [])
+    return st.session_state["pages"]
+
+def reset_pages():
+    for k in ["pages"]:
+        st.session_state.pop(k, None)
+
+def _page_ls_key(suffix: str, idx: int) -> str:
+    return _ls_key(f"{suffix}_{idx}")
+
+def upsert_translation_page(log_id: str, page_index: int, patch: dict):
+    """
+    將單頁欄位寫回 translation_pages（若不存在就插入；存在就更新）。
+    需要你已有的唯一鍵：ON CONFLICT (log_id, page_index)
+    """
+    if not log_id:
+        return
+    patch = {k: v for k, v in patch.items() if v is not None}
+    base = {"log_id": log_id, "page_index": page_index}
+    payload = base | patch
+    try:
+        sb.table("translation_pages").upsert(
+            payload, on_conflict="log_id,page_index"
+        ).execute()
+    except Exception as e:
+        if SHOW_DEBUG:
+            st.warning(f"translation_pages upsert 失敗：{e}")
+
+def _get_or_create_log_for_pages() -> str | None:
+    """
+    多頁流程上傳時，先建立/沿用一筆草稿 log，允許 combined_prompt 為空。
+    規則：沿用 user_id 最新的 draft；沒有就 insert 一筆只含 user_id 的草稿。
+    """
+    if st.session_state.get("log_id"):
+        return st.session_state["log_id"]
+
+    user_id = get_user_id()
+    try:
+        q = (sb.table("translation_logs")
+              .select("id")
+              .eq("user_id", user_id)
+              .eq("status", "draft")
+              .order("created_at", desc=True)
+              .limit(1)
+              .execute())
+        if q.data:
+            st.session_state["log_id"] = q.data[0]["id"]
+            return st.session_state["log_id"]
+    except Exception:
+        pass
+
+    try:
+        res = (sb.table("translation_logs")
+               .insert({"user_id": user_id, "status": "draft"})
+               .execute())
+        new_id = res.data[0]["id"]
+        st.session_state["log_id"] = new_id
+        return new_id
+    except Exception as e:
+        st.error(f"建立草稿失敗：{e}")
+        return None
 
 # ===========================================
 # Sidebar（用固定 ID 做值，format_func 顯示 i18n 文案）
@@ -1140,62 +1145,100 @@ if menu == "ocr":
                 if st.button(t("btn_delete"), key=f"delete_{i}"):
                     deleted_name = st.session_state["characters"][i]["name"]
                     del st.session_state["characters"][i]
-                    st.success(f"已刪除角色：{deleted_name}" if st.session_state["lang"] == "zh-Hant" else f"已删除角色：{deleted_name}")
+                    st.success(f"已刪除角色：{deleted_name}" if st.session_state["lang"] == "zh-Hant" else "已删除角色：{deleted_name}")
                     st.rerun()
 
+    # -------------------------
+    # ✅ 新增：多頁上傳 + 立即 upsert page 殼
+    # -------------------------
     st.markdown("---")
-    uploaded_file = st.file_uploader(t("main_img_uploader"), type=["jpg", "jpeg", "png"], key="main_img")
 
-    if uploaded_file:
-        image = Image.open(uploaded_file)
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        raw_png_bytes = buffered.getvalue()  # ← 取得真正的 bytes
-        img_base64 = base64.b64encode(raw_png_bytes).decode("utf-8")
-        st.session_state["image_base64"] = img_base64
+    pages = ensure_pages_list()
 
-        # ✅ 上傳主圖到 Storage
+    uploaded_files = st.file_uploader(
+        t("main_img_uploader"),
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True,
+        key="multi_main_imgs"
+    )
+
+    # 限制一次最多 5 張
+    if uploaded_files and len(uploaded_files) > 5:
+        st.warning("一次最多選 5 張圖片。" if st.session_state["lang"]=="zh-Hant" else "一次最多选 5 张图片。")
+
+    if uploaded_files:
+        # 新上傳時，清掉舊的單頁狀態
+        reset_pages()
+        pages = ensure_pages_list()
+
+        # 先確保有 log_id，好把 image_url 立即 upsert 進子表
+        log_id = _get_or_create_log_for_pages()
+
         uid = get_user_id()
         import uuid as _uuid
-        file_id = str(_uuid.uuid4())
-        main_path = _make_user_scoped_path(uid, f"main/{file_id}.png")
-        main_image_url = storage_upload_bytes(main_path, raw_png_bytes, content_type="image/png")
 
-        # st.write("main_image_url =", main_image_url)
+        for i, f in enumerate(uploaded_files[:5]):
+            # 轉 PNG bytes
+            img = Image.open(f)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            raw_png_bytes = buf.getvalue()
 
-        st.session_state["main_image_url"] = main_image_url
+            # 上傳 Storage：以 logs/<log_id>/pages/<i>.png
+            if log_id:
+                storage_path = _make_user_scoped_path(uid, f"logs/{log_id}/pages/{i}.png")
+            else:
+                storage_path = _make_user_scoped_path(uid, f"main/{str(_uuid.uuid4())}.png")
 
-        # 清 session 依賴
-        st.session_state.pop("log_id", None)
-        st.session_state.pop("combined_prompt", None)
-        st.session_state.pop("prompt_template", None)
-        st.session_state.pop("prompt_input", None)
-        st.session_state.pop("translation", None)
-        st.session_state.pop("ocr_text", None)
-        st.session_state["corrected_text_saved"] = False
+            image_url = storage_upload_bytes(storage_path, raw_png_bytes, content_type="image/png")
 
-    elif "image_base64" in st.session_state:
-        img_bytes = base64.b64decode(st.session_state["image_base64"])
-        image = Image.open(io.BytesIO(img_bytes))
-        img_base64 = st.session_state["image_base64"]
-    else:
-        image = None
+            # 存入 pages 陣列
+            pages.append({
+                "image_url": image_url,
+                "raw_bytes": raw_png_bytes,
+                "ocr_text": None,
+                "corrected_text": None,
+                "output_text": None
+            })
 
-    if image:
-        st.image(image, caption=("已上傳圖片" if st.session_state["lang"]=="zh-Hant" else "已上传图片"), use_container_width=True)
-        if st.button(t("btn_run_ocr")):
-            with st.spinner(("辨識中... 使用 GPT-4o 分析圖片" if st.session_state["lang"]=="zh-Hant" else "识别中... 使用 GPT-4o 分析图片")):
-                image_url = f"data:image/png;base64,{img_base64}"
-                character_context = "\n".join([
-                    f"・{c['name']}：{c['description']}"
-                    for c in st.session_state.get("characters", [])
-                ])
-                if not character_context:
-                    character_context = t("ocr_charlist_empty")
+            # 立即 upsert 到 translation_pages（只有 image_url 與頁序）
+            if log_id and image_url:
+                upsert_translation_page(log_id, i, {"image_url": image_url})
 
-                prompt_text = t("ocr_system").format(charlist=character_context)
+        st.success(("已上傳 {} 張頁面".format(len(pages)) if st.session_state["lang"]=="zh-Hant"
+                    else "已上传 {} 张页面".format(len(pages))))
 
+    # 頁面縮圖預覽
+    if pages:
+        try:
+            st.image(
+                [Image.open(io.BytesIO(p["raw_bytes"])) for p in pages if p.get("raw_bytes")],
+                caption=[f"Page {i}" for i in range(len(pages))],
+                use_container_width=True
+            )
+        except Exception:
+            pass
+
+    # 逐頁 OCR
+    if pages and st.button(t("btn_run_ocr")):
+        with st.spinner(("辨識中... 使用 GPT-4o 分析圖片" if st.session_state["lang"]=="zh-Hant" else "识别中... 使用 GPT-4o 分析图片")):
+            # 準備角色名單
+            character_context = "\n".join([
+                f"・{c['name']}：{c['description']}"
+                for c in st.session_state.get("characters", [])
+            ]) or t("ocr_charlist_empty")
+
+            prompt_text = t("ocr_system").format(charlist=character_context)
+
+            log_id = _get_or_create_log_for_pages()
+            prog = st.progress(0.0)
+            total = len(pages)
+
+            for i, pg in enumerate(pages):
                 try:
+                    img_b64 = base64.b64encode(pg["raw_bytes"]).decode("utf-8")
+                    image_url = f"data:image/png;base64,{img_b64}"
+
                     response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
@@ -1203,80 +1246,82 @@ if menu == "ocr":
                             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": image_url}}]}
                         ]
                     )
-                    st.session_state["ocr_text"] = response.choices[0].message.content.strip()
-                    st.session_state["corrected_text_saved"] = False
-                    st.session_state["ocr_version"] = st.session_state.get("ocr_version", 0) + 1
+                    ocr_text = (response.choices[0].message.content or "").strip()
+                    pages[i]["ocr_text"] = ocr_text
 
-                    ls_remove(_ls_key("corrected_text"))
+                    # DB：把 ocr_text 寫回該頁
+                    if log_id:
+                        upsert_translation_page(log_id, i, {"ocr_text": ocr_text})
 
                 except Exception as e:
-                    st.error((f"OCR 失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"OCR 失败：{e}"))
+                    st.warning(f"OCR 第 {i+1} 頁失敗：{e}")
 
-    if "ocr_text" in st.session_state:
-        st.text_area(t("ocr_result_label"), st.session_state["ocr_text"], height=300)
+                prog.progress((i+1)/total)
+
+            st.success("OCR 完成" if st.session_state["lang"]=="zh-Hant" else "OCR 完成")
 
 # ======================================================
-# 🟡 ステップ2：テキスト修正
+# 🟡 ステップ2：テキスト修正（多頁 Tabs）
 # ======================================================
 elif menu == "edit":
-    if "ocr_text" not in st.session_state:
+    pages = st.session_state.get("pages", [])
+    if not pages:
         st.warning("請先上傳圖片並執行辨識。" if st.session_state["lang"]=="zh-Hant" else "请先上传图片并执行识别。")
     else:
         st.subheader(t("edit_title"))
-        col1, col2 = st.columns([1, 1.3])
 
-        with col1:
-            st.markdown(t("orig_image"))
-            if "image_base64" in st.session_state:
-                img_bytes = base64.b64decode(st.session_state["image_base64"])
-                image = Image.open(io.BytesIO(img_bytes))
-                st.image(image, caption=("參考圖片" if st.session_state["lang"]=="zh-Hant" else "参考图片"), use_container_width=True)
-            else:
-                st.info("尚未上傳圖片" if st.session_state["lang"]=="zh-Hant" else "尚未上传图片")
+        tabs = st.tabs([f"第{i+1}頁" if st.session_state["lang"]=="zh-Hant" else f"第{i+1}页" for i in range(len(pages))])
 
-        with col2:
-            st.markdown(t("corr_area"))
+        for i, (tab, pg) in enumerate(zip(tabs, pages)):
+            with tab:
+                col1, col2 = st.columns([1, 1.3])
+                with col1:
+                    st.markdown(t("orig_image"))
+                    if pg.get("raw_bytes"):
+                        st.image(Image.open(io.BytesIO(pg["raw_bytes"])), use_container_width=True)
 
-            # ── ① 若 session 裡還沒有 corrected_text，先嘗試從 localStorage 載入（只插入，不改原邏輯）
-            try:
-                if "corrected_text" not in st.session_state:
-                    cached_corr = ls_get(_ls_key("corrected_text"))
-                    if isinstance(cached_corr, str) and cached_corr.strip():
-                        st.session_state["corrected_text"] = cached_corr
-            except Exception:
-                pass
-
-            current_version = st.session_state.get("ocr_version", 0)
-            if st.session_state.get("corrected_text_version") != current_version:
-                st.session_state["corrected_text"] = st.session_state["ocr_text"]
-                st.session_state["corrected_text_version"] = current_version
-                # （可選）OCR 版本變更時，同步清掉/覆寫 localStorage 的草稿，避免舊稿混入
-                try:
-                    # 清掉舊草稿（若你想保留可改成 ls_set 覆寫）
-                    ls_remove(_ls_key("corrected_text"))
-                except Exception:
-                    pass
-
-            new_text = st.text_area(
-                t("corr_input_label"),
-                value=st.session_state.get("corrected_text", st.session_state["ocr_text"]),
-                height=500
-            )
-
-            if st.button(t("btn_save_corr")):
-                st.session_state["corrected_text"] = new_text
-                # ── ② 使用者按下「保存」時，將最新內容寫回 localStorage（只插入，不改原邏輯）
-                try:
-                    ls_set(_ls_key("corrected_text"), st.session_state.get("corrected_text", ""))
-                except Exception:
-                    pass
-                st.success(t("saved_corr"))
+                with col2:
+                    st.markdown(t("corr_area"))
+                    # 若 localStorage 有每頁草稿，可在此讀回（可選）
+                    try:
+                        cached = ls_get(_page_ls_key("corrected_text", i))
+                    except Exception:
+                        cached = None
+                    default_text = (cached if isinstance(cached, str) and cached.strip() else
+                                    (pg.get("corrected_text") or pg.get("ocr_text") or ""))
+                    new_text = st.text_area(
+                        t("corr_input_label"),
+                        value=default_text,
+                        height=300,
+                        key=f"corr_input_{i}"
+                    )
+                    if st.button(t("btn_save_corr"), key=f"save_corr_{i}"):
+                        pages[i]["corrected_text"] = new_text
+                        # 寫回 localStorage（每頁一個 key）
+                        try:
+                            ls_set(_page_ls_key("corrected_text", i), new_text)
+                        except Exception:
+                            pass
+                        # DB：更新 corrected_text
+                        if st.session_state.get("log_id"):
+                            upsert_translation_page(st.session_state["log_id"], i, {"corrected_text": new_text})
+                        st.success(t("saved_corr"))
 
 # ======================================================
-# 🟣 ステップ3：輸入提示並翻譯
+# 🟣 ステップ3：輸入提示並翻譯（逐頁翻譯＋合併顯示）
 # ======================================================
 elif menu == "translate":
-    if "corrected_text" not in st.session_state:
+    # 若是多頁流程，先用各頁文字自動組一份「合併原文」供舊有模板使用
+    pages = st.session_state.get("pages", [])
+    if pages and "corrected_text" not in st.session_state:
+        merged = []
+        for i, pg in enumerate(pages):
+            src = (pg.get("corrected_text") or pg.get("ocr_text") or "").strip()
+            merged.append(f"【第{i+1}頁】\n{src}" if src else f"【第{i+1}頁】\n")
+        st.session_state["corrected_text"] = "\n\n".join(merged)
+
+    # 舊有邏輯：若沒有任何來源，才提示
+    if not pages and "corrected_text" not in st.session_state:
         st.warning("請先完成文字修正步驟。" if st.session_state["lang"]=="zh-Hant" else "请先完成文字修正步骤。")
     else:
         st.subheader(t("translate_input_title"))
@@ -1333,37 +1378,25 @@ elif menu == "translate":
                 "status": "draft",
             }
 
-            # ✅ 新增：主圖 URL
+            # ✅ 新增：主圖 URL（如你還有沿用）
             main_image_url = st.session_state.get("main_image_url")
             if main_image_url:
                 payload["image_url"] = main_image_url   # 對應 DB 欄位：image_url (text)
-
-            # ✅ 可選：把目前可得的上下文也一併帶進草稿（若資料表已有對應欄位）
-            # ocr_text = st.session_state.get("ocr_text")
-            # if ocr_text is not None:
-            #     payload["ocr_text"] = ocr_text
-
-            # corrected_text = st.session_state.get("corrected_text")
-            # if corrected_text is not None:
-            #     payload["corrected_text"] = corrected_text
 
             # # ✅ 角色資料（若 DB 有 character_data: jsonb）
             chars = st.session_state.get("characters")
             if chars:
                 try:
-                    # 只保留必要欄位，並帶上角色的 image_url（若已有上傳）
                     payload["character_data"] = [
                         {
                             "name": c.get("name"),
                             "description": c.get("description"),
-                            "image_url": c.get("image_url") or None,  # 之後你完成上傳後就會有
+                            "image_url": c.get("image_url") or None,
                         }
                         for c in chars
                     ]
                 except Exception:
                     pass
-
-
 
             # 可選：把目前可得的上下文也一併帶進草稿（若資料表已有對應欄位）
             ocr_text = st.session_state.get("ocr_text")
@@ -1372,17 +1405,6 @@ elif menu == "translate":
             corrected_text = st.session_state.get("corrected_text")
             if corrected_text is not None:
                 payload["corrected_text"] = corrected_text
-            # 角色資料（若有欄位 character_data 可放 JSONB）
-            chars = st.session_state.get("characters")
-            if chars:
-                try:
-                    # 只保留必要欄位
-                    payload["character_data"] = [
-                        {"name": c.get("name"), "description": c.get("description")}
-                        for c in chars
-                    ]
-                except Exception:
-                    pass
 
             res = (
                 sb_client.table("translation_logs")
@@ -1434,23 +1456,6 @@ elif menu == "translate":
                 except Exception:
                     pass
 
-            # 可選：同步目前上下文到草稿（若資料表有欄位）
-            # ocr_text = st.session_state.get("ocr_text")
-            # if ocr_text is not None:
-            #     update_dict["ocr_text"] = ocr_text
-            # corrected_text = st.session_state.get("corrected_text")
-            # if corrected_text is not None:
-            #     update_dict["corrected_text"] = corrected_text
-            # chars = st.session_state.get("characters")
-            # if chars:
-            #     try:
-            #         update_dict["character_data"] = [
-            #             {"name": c.get("name"), "description": c.get("description")}
-            #             for c in chars
-            #         ]
-            #     except Exception:
-            #         pass
-
             sb_client.table("translation_logs").update(update_dict).eq("id", log_id).execute()
             return True
 
@@ -1483,35 +1488,14 @@ elif menu == "translate":
             return True
         # ---------- 工具函式結束 ----------
 
-        # examples = {
-        #     "background_style": (
-        #         "本作背景設定於1970年代的日本，屬於昭和時代，語言風格貼近當代小學生使用的日常口語，故事風格輕鬆幽默且富教育意義。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "本作背景设定于1970年代的日本，属于昭和时代，语言风格贴近当代小学生使用的日常口语，故事风格轻松幽默且富教育意义。"
-        #     ),
-        #     "terminology": (
-        #         "時光機（タイムマシン）：以書桌抽屜為出入口的未來道具。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "时光机（タイムマシン）：以书桌抽屉为出入口的未来道具。"
-        #     ),
-        #     "translation_policy": (
-        #         "以符合角色語氣的自然台灣華語翻譯，保留漫畫幽默感並注意時代背景與年齡語感。"
-        #         if st.session_state["lang"]=="zh-Hant"
-        #         else "以符合角色语气的自然台湾华语翻译，保留漫画幽默感并注意时代背景与年龄语感。"
-        #     )
-        # }
-
         st.markdown(f"### {t('bg_title')}")
         st.caption(t("bg_caption"))
-        # with st.expander(t("example")):
-        #     st.code(examples["background_style"], language="markdown")
         bind_textarea_with_ls(
             key="background_style",
             label="輸入內容：" if st.session_state["lang"]=="zh-Hant" else "输入内容：",
             default_value=STRINGS[st.session_state["lang"]]["tpl_background"],
             height=200
         )
-
 
         if "characters" in st.session_state and st.session_state["characters"]:
             st.markdown(f"### {t('char_traits_title')}")
@@ -1559,7 +1543,6 @@ elif menu == "translate":
                         pass
                     del st.session_state[k]
 
-
         # ===== 這裡開始已經離開清理迴圈（很重要！）=====
 
         # 術語
@@ -1572,7 +1555,6 @@ elif menu == "translate":
             height=200
         )
 
-
         # 翻譯方針
         st.markdown(f"### {t('policy_title')}")
         st.caption(t("policy_caption"))
@@ -1582,8 +1564,6 @@ elif menu == "translate":
             default_value=STRINGS[st.session_state["lang"]]["tpl_policy"],
             height=200
         )
-
-
 
         # ===== 產生提示內容（唯一可建新 ID 的地方） =====
         if st.button(t("btn_save_and_build")):
@@ -1599,6 +1579,7 @@ elif menu == "translate":
                     ))
                 per_char_sections = "\n".join(blocks)
 
+            # 若是多頁流程，st.session_state["corrected_text"] 已在上面自動合併生成
             combined_prompt = (
                 STRINGS[st.session_state["lang"]]["combined_header"] + "\n\n" +
                 STRINGS[st.session_state["lang"]]["sec_background"].format(content=st.session_state["background_style"]) +
@@ -1607,7 +1588,7 @@ elif menu == "translate":
             )
             if per_char_sections:
                 combined_prompt += STRINGS[st.session_state["lang"]]["sec_charblocks_title"] + per_char_sections + "\n\n"
-            combined_prompt += STRINGS[st.session_state["lang"]]["sec_source"].format(source=st.session_state["corrected_text"])
+            combined_prompt += STRINGS[st.session_state["lang"]]["sec_source"].format(source=st.session_state.get("corrected_text",""))
 
             st.session_state["combined_prompt"] = combined_prompt
             st.session_state["prompt_input"] = combined_prompt
@@ -1637,7 +1618,6 @@ elif menu == "translate":
                             icon="💾"
                         )
                     else:
-                        # 若沒有成功寫入任何資料（極少發生）
                         st.info(
                             "⚠️ 未能更新提示內容，請稍後再試。"
                             if st.session_state["lang"] == "zh-Hant"
@@ -1645,7 +1625,6 @@ elif menu == "translate":
                         )
 
             except Exception as e:
-                # 捕捉例外並顯示錯誤（雙語）
                 st.error(
                     f"❌ 建立或更新輸入紀錄失敗：{e}"
                     if st.session_state["lang"] == "zh-Hant"
@@ -1660,7 +1639,6 @@ elif menu == "translate":
             height=300
         )
 
-
         if st.button(t("btn_save_prompt")):
             st.session_state["prompt_template"] = st.session_state["prompt_input"]
             st.success("提示內容已儲存" if st.session_state["lang"]=="zh-Hant" else "提示内容已保存")
@@ -1668,19 +1646,14 @@ elif menu == "translate":
                 # 取得目前可用的提示內容（依序取 combined_prompt / prompt_template / prompt_input）
                 combined_now = _get_combined().strip()
 
-                # 🧩 檢查提示內容是否為空
                 if not combined_now:
                     st.info(
                         "⚠️ 尚未建立資料列；請先輸入提示內容。"
                         if st.session_state["lang"] == "zh-Hant"
                         else "⚠️ 尚未建立资料列；请先输入提示内容。"
                     )
-
                 else:
-                    # 📝 呼叫草稿管理函式：會自動判斷是否沿用現有草稿或新建一筆新的
                     draft_id = _create_log_only_here(sb, combined_now)
-
-                    # ✅ 若有成功取得草稿 ID，則執行更新（冪等更新）
                     if draft_id and _update_prompt_if_possible(sb):
                         st.toast(
                             "✅ 已更新提示內容（同一筆）"
@@ -1689,7 +1662,6 @@ elif menu == "translate":
                             icon="💾"
                         )
                     else:
-                        # ⚠️ 如果沒更新成功（例如無 log_id 或資料庫拒絕）
                         st.info(
                             "⚠️ 未能更新提示內容，請稍後再試。"
                             if st.session_state["lang"] == "zh-Hant"
@@ -1697,14 +1669,13 @@ elif menu == "translate":
                         )
 
             except Exception as e:
-                # ❌ 捕捉例外並顯示錯誤訊息（雙語）
                 st.error(
                     f"❌ 更新提示內容失敗：{e}"
                     if st.session_state["lang"] == "zh-Hant"
                     else f"❌ 更新提示内容失败：{e}"
                 )
 
-
+        # ===== 逐頁翻譯（新） =====
         if st.button(t("btn_run_translate")):
             prompt_for_translation = (
                 st.session_state.get("prompt_template")
@@ -1715,21 +1686,78 @@ elif menu == "translate":
                 st.warning("請先產生或儲存提示內容，再執行翻譯。" if st.session_state["lang"]=="zh-Hant" else "请先生成或保存提示内容，再执行翻译。")
             else:
                 with st.spinner("翻譯中... 使用 GPT-4o" if st.session_state["lang"]=="zh-Hant" else "翻译中... 使用 GPT-4o"):
+                    log_id = _get_or_create_log_for_pages()
+                    # 冪等更新一次主要 prompt（跟既有流程一致）
                     try:
-                        response = client.chat.completions.create(
-                            model="gpt-4o",
-                            messages = [
-                                { "role": "system", "content": STRINGS[st.session_state["lang"]]["translate_system"] },
-                                {"role": "user", "content": prompt_for_translation}
-                            ],
-                            temperature=temperature,
-                            top_p=0.95,
-                        )
-                        st.session_state["translation"] = response.choices[0].message.content.strip()
+                        _update_prompt_if_possible(sb)
                     except Exception as e:
-                        st.error((f"翻譯失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"翻译失败：{e}"))
-                        st.session_state.pop("translation", None)
+                        if SHOW_DEBUG:
+                            st.warning(f"更新主提示失敗：{e}")
 
+                    pages = st.session_state.get("pages", [])
+                    if not pages:
+                        # 若不是多頁流程，維持舊單份翻譯（向下相容）
+                        try:
+                            response = client.chat.completions.create(
+                                model="gpt-4o",
+                                messages = [
+                                    { "role": "system", "content": STRINGS[st.session_state["lang"]]["translate_system"] },
+                                    {"role": "user", "content": prompt_for_translation}
+                                ],
+                                temperature=temperature,
+                                top_p=0.95,
+                            )
+                            st.session_state["translation"] = response.choices[0].message.content.strip()
+                        except Exception as e:
+                            st.error((f"翻譯失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"翻译失败：{e}"))
+                            st.session_state.pop("translation", None)
+                    else:
+                        prog = st.progress(0.0)
+                        total = len(pages)
+                        out_all = []
+
+                        for i, pg in enumerate(pages):
+                            src = (pg.get("corrected_text") or pg.get("ocr_text") or "").strip()
+                            if not src:
+                                pages[i]["output_text"] = ""
+                                if log_id:
+                                    upsert_translation_page(log_id, i, {"output_text": ""})
+                                prog.progress((i+1)/total)
+                                continue
+                            try:
+                                response = client.chat.completions.create(
+                                    model="gpt-4o",
+                                    messages=[
+                                        {"role": "system", "content": STRINGS[st.session_state["lang"]]["translate_system"]},
+                                        {"role": "user", "content": prompt_for_translation},
+                                        {"role": "user", "content": f"【原始對白（第{i+1}頁）】\n{src}"}
+                                    ],
+                                    temperature=temperature,
+                                    top_p=0.95,
+                                )
+                                out = (response.choices[0].message.content or "").strip()
+                                pages[i]["output_text"] = out
+                                out_all.append(f"【第{i+1}頁】\n{out}")
+                                if log_id:
+                                    upsert_translation_page(log_id, i, {"output_text": out})
+                            except Exception as e:
+                                st.error((f"翻譯第 {i+1} 頁失敗：{e}" if st.session_state["lang"]=="zh-Hant" else f"翻译第 {i+1} 页失败：{e}"))
+                                pages[i]["output_text"] = ""
+                            prog.progress((i+1)/total)
+
+                        final_all = "\n\n".join(out_all).strip()
+                        st.session_state["translation"] = final_all or st.session_state.get("translation")
+
+                        if log_id and final_all:
+                            try:
+                                sb.table("translation_logs").update(
+                                    {"output_text": final_all}
+                                ).eq("id", log_id).execute()
+                            except Exception as e:
+                                if SHOW_DEBUG:
+                                    st.warning(f"更新 translation_logs.output_text 失敗：{e}")
+
+                # 舊有定稿寫回（保留）
                 try:
                     if st.session_state.get("log_id"):
                         if _update_output_if_possible(sb):
